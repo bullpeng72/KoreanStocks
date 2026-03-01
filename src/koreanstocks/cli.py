@@ -183,7 +183,7 @@ def analyze(
 
     [bold]출력 항목:[/bold]
       기술점수 (Tech)  — RSI, MACD, BB 등 지표 기반 (0~100)
-      ML점수           — 크로스섹셔널 퍼센타일 순위 예측 (0~100)
+      ML점수           — 10거래일 후 상위 25% 확률 (캘리브레이션 0~100)
       감성점수 (News)  — 뉴스 GPT 감성 분석 (-100~+100)
       AI 의견          — BUY / HOLD / SELL + 한줄 요약 + 목표가
 
@@ -225,12 +225,11 @@ def train(
     """
     [bold]ML 모델 재학습[/bold] — RandomForest·GradientBoosting·XGBoost 앙상블
 
-    [bold]사용 피처 (46개):[/bold]
-    [dim]  기술지표 34개 — RSI, MACD, BB, ADX, VWAP, CMF, MFI, SQZMI 등[/dim]
-    [dim]  거시경제 3개  — VIX 레벨/변화율, S&P500 1개월 수익률[/dim]
-    [dim]  PyKrx 9개    — PBR, PER, DIV + 외국인/기관 5일 순매수 비율[/dim]
+    [bold]사용 피처 (25개):[/bold]
+    [dim]  기술지표 22개 — ATR, ADX, BB, MACD, CMF, VZO, OBV, SQZMI, Fisher 등[/dim]
+    [dim]  시장·거시 3개  — 시장 상대강도 1m/3m, VIX 레벨/변화율, S&P500 1m[/dim]
 
-    [bold]타깃:[/bold] 10거래일(2주) 후 수익률 상위 30% 이진 분류 (AUC-ROC ≥ 0.55)
+    [bold]타깃:[/bold] 10거래일 후 수익률 상위 25%/하위 25% 이진 분류 (중간 50% neutral zone 제외)
 
     [bold]예시:[/bold]
     [dim]  koreanstocks train[/dim]
