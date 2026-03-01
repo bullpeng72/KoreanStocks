@@ -16,8 +16,27 @@ from koreanstocks.core.data.database import db_manager
 
 logger = logging.getLogger(__name__)
 
-# train_models.py의 BASE_FEATURE_COLS 개수 — 이전(22피처) vs 신규(31피처) 모델 구분용
-_BASE_FEATURE_COUNT = 22
+# 예측 시 사용할 피처 목록 — trainer.py BASE_FEATURE_COLS와 동기화 필수 (25개)
+_FEATURE_COLS = [
+    'atr_ratio', 'adx', 'adx_di_diff', 'bb_width',
+    'rs_vs_mkt_3m', 'rs_vs_mkt_1m', 'high_52w_ratio', 'mom_accel',
+    'macd_diff', 'macd_diff_change', 'macd_slope_5d', 'price_sma_5_ratio',
+    'fisher', 'bullish_fractal_5d',
+    'cmf', 'vzo', 'obv_change', 'vol_ratio', 'vol_change', 'rsi_mfi_div',
+    'sqzmi',
+    'candle_body',
+    'vix_level', 'vix_change_5d', 'sp500_1m',
+]
+# 구버전(22/34/37/23) 구분용 문서 상수 (코드 로직에서는 _FEATURE_COLS 컬럼명 선택 사용)
+_BASE_FEATURE_COUNT = 25
+# AUC 가중치 하한선: AUC 기반 가중치 = (AUC - 0.5) / 상수
+# AUC=0.55 → weight=0.05, AUC=0.60 → weight=0.10 (최대 2배 차이 허용)
+_AUC_WEIGHT_FLOOR = 0.50   # AUC - 0.5가 이 값 이하면 weight=0 처리
+# 모델 품질 게이트: test_auc 가 이 값 미만이면 모델 로드를 거부하고 tech_score 폴백 사용
+# AUC < 0.52 = 랜덤(0.5)과 사실상 동등 → 예측력 없음
+_MIN_MODEL_AUC = 0.52
+# 하위 호환: 구버전 R² 기반 모델 로드 시 fallback용 (사용 안 함)
+_MIN_MODEL_R2 = 0.0
 
 
 class StockPredictionModel:
@@ -27,13 +46,12 @@ class StockPredictionModel:
         self.models = {}
         self.scalers = {}
         self.model_weights = {}   # name → 1/RMSE 가중치 (성능 기반 앙상블용)
+        self.calibrations: Dict[str, list] = {}  # name → 101분위수 배열 (predict_proba → 0~100)
         # 절대 경로 설정
         self.model_dir = os.path.join(config.BASE_DIR, "models", "saved", "prediction_models")
         self.params_dir = os.path.join(config.BASE_DIR, "models", "saved", "model_params")
         # 시장 지수 당일 캐시 (KS11/KQ11 별도 캐싱, 상대강도 피처용)
         self._market_cache: Dict[str, Any] = {}  # symbol → {'df': DataFrame, 'date': str}
-        # PyKrx 당일 캐시 (종목별 펀더멘털/투자자 피처)
-        self._pykrx_cache: Dict[str, Any] = {}   # code → {'data': dict, 'date': str}
         self._load_existing_models()
 
     def _load_existing_models(self):
@@ -54,20 +72,41 @@ class StockPredictionModel:
                     loaded_model = joblib.load(model_path)
                     loaded_scaler = joblib.load(scaler_path)
 
-                    self.models[name] = loaded_model
-                    self.scalers[name] = loaded_scaler
-
-                    # params JSON에서 test_rmse를 읽어 가중치 산출 (없으면 균등 가중치 1.0)
+                    # params JSON에서 품질 지표 확인 — 기준 미달 모델은 로드 거부
                     params_path = os.path.join(self.params_dir, f"{name}_params.json")
                     if os.path.exists(params_path):
                         with open(params_path, 'r', encoding='utf-8') as pf:
                             meta = json.load(pf)
-                        rmse = float(meta.get("test_rmse", 1.0))
-                        self.model_weights[name] = 1.0 / max(rmse, 0.01)
+                        model_type = meta.get("model_type", "regression")
+                        if model_type == "binary_classifier":
+                            auc = float(meta.get("test_auc", 0.0))
+                            if auc < _MIN_MODEL_AUC:
+                                logger.warning(
+                                    f"⚠️  {name} 품질 기준 미달 (test_auc={auc:.4f} < {_MIN_MODEL_AUC}) — "
+                                    f"로드 건너뜀. tech_score 폴백으로 동작합니다."
+                                )
+                                continue
+                            # AUC 기반 가중치: (AUC - 0.5) 에 비례
+                            self.model_weights[name] = max(auc - _AUC_WEIGHT_FLOOR, 1e-6)
+                            # 캘리브레이션 배열 로드 (101분위수)
+                            cal = meta.get("calibration")
+                            if cal and len(cal) == 101:
+                                self.calibrations[name] = cal
+                            logger.info(f"✅ Loaded classifier: {name} (auc={auc:.4f}, weight={self.model_weights[name]:.4f})")
+                        else:
+                            # 구버전 regression 모델 — R² 기준
+                            r2   = float(meta.get("test_r2",   0.0))
+                            rmse = float(meta.get("test_rmse", 30.0))
+                            if r2 < _MIN_MODEL_R2:
+                                logger.warning(f"⚠️  {name} 구버전 R² 미달 ({r2:.4f}) — 건너뜀.")
+                                continue
+                            self.model_weights[name] = 1.0 / max(rmse, 5.0)
+                            logger.info(f"✅ Loaded regressor: {name} (r2={r2:.4f})")
                     else:
-                        self.model_weights[name] = 1.0
+                        self.model_weights[name] = 0.05  # 파라미터 없으면 기본 가중치
 
-                    logger.info(f"✅ Loaded ML model & scaler: {name} (weight={self.model_weights[name]:.3f})")
+                    self.models[name]  = loaded_model
+                    self.scalers[name] = loaded_scaler
                 except Exception as e:
                     logger.error(f"❌ Error loading {name} package: {e}")
             else:
@@ -81,7 +120,7 @@ class StockPredictionModel:
         """시장 지수 수익률 DataFrame 반환 (KS11=KOSPI, KQ11=KOSDAQ, 당일 캐싱).
 
         컬럼: return_1m (20d), return_3m (60d) — 인덱스: 날짜
-        시장 데이터 미수신 시 빈 DataFrame 반환 (피처 fallback 처리).
+        FDR 실패 시 yfinance(^KS11/^KQ11) 폴백.
         """
         from datetime import date as _date
         from koreanstocks.core.data.provider import data_provider as _dp
@@ -89,6 +128,7 @@ class StockPredictionModel:
         cached = self._market_cache.get(index_symbol, {})
         if cached.get('date') == today and not cached.get('df', pd.DataFrame()).empty:
             return cached['df']
+        # FDR 1차 시도
         try:
             raw = _dp.get_ohlcv(index_symbol, period='2y')
             if not raw.empty:
@@ -96,83 +136,68 @@ class StockPredictionModel:
                 mkt['return_1m'] = raw['close'].pct_change(20)
                 mkt['return_3m'] = raw['close'].pct_change(60)
                 self._market_cache[index_symbol] = {'df': mkt, 'date': today}
-                logger.debug(f"Market data ({index_symbol}) refreshed for relative strength features.")
                 return mkt
         except Exception as e:
-            logger.warning(f"Failed to fetch {index_symbol} market data: {e}")
+            logger.warning(f"Failed to fetch {index_symbol} via FDR: {e}")
+        # yfinance 폴백
+        yf_map = {'KS11': '^KS11', 'KQ11': '^KQ11'}
+        yf_sym = yf_map.get(index_symbol)
+        if yf_sym:
+            try:
+                import yfinance as yf
+                raw = yf.download(yf_sym, period='2y', progress=False)
+                if not raw.empty:
+                    close = raw.xs('Close', level=0, axis=1).iloc[:, 0] \
+                        if isinstance(raw.columns, pd.MultiIndex) else raw['Close']
+                    close.index = pd.to_datetime(close.index).tz_localize(None)
+                    mkt = pd.DataFrame(index=close.index)
+                    mkt['return_1m'] = close.pct_change(20)
+                    mkt['return_3m'] = close.pct_change(60)
+                    self._market_cache[index_symbol] = {'df': mkt, 'date': today}
+                    logger.debug(f"Market data ({index_symbol}) loaded via yfinance fallback.")
+                    return mkt
+            except Exception as e2:
+                logger.warning(f"yfinance fallback for {yf_sym} also failed: {e2}")
         return pd.DataFrame()
 
-    def _get_xs_market_data(self, today_str: str) -> Dict[str, pd.Series]:
-        """전체 시장 PBR/PER/수급 크로스섹셔널 데이터를 당일 1회 캐싱.
+    def _get_macro_df(self) -> pd.DataFrame:
+        """VIX·S&P500 거시경제 데이터 반환 (당일 캐싱).
 
-        Returns: {'pbr': Series, 'per': Series, 'foreign': Series, 'inst': Series}
-        인덱스: 종목 코드. 비거래일엔 최근 거래일까지 최대 7일 역탐색.
+        컬럼: vix_level, vix_change_5d, sp500_1m — 인덱스: 날짜(tz-naive)
         """
-        cache_key = '__xs_market__'
-        cached = self._market_cache.get(cache_key, {})
-        if cached.get('date') == today_str and 'data' in cached:
-            return cached['data']
-
-        result: Dict[str, pd.Series] = {}
+        from datetime import date as _date
+        today = _date.today().isoformat()
+        cached = self._market_cache.get('__macro__', {})
+        if cached.get('date') == today and not cached.get('df', pd.DataFrame()).empty:
+            return cached['df']
         try:
-            from pykrx import stock as pykrx_stock
-            ref_date = ''
-            # 비거래일 대응: 최근 거래일까지 최대 7일 역탐색
-            for i in range(7):
-                d = (datetime.now() - timedelta(days=i)).strftime('%Y%m%d')
-                try:
-                    fund_df = pykrx_stock.get_market_fundamental_by_ticker(d, market='ALL')
-                    if not fund_df.empty:
-                        ref_date = d
-                        if 'PBR' in fund_df.columns:
-                            result['pbr'] = fund_df['PBR'].replace(0, np.nan).dropna()
-                        if 'PER' in fund_df.columns:
-                            result['per'] = fund_df['PER'].replace(0, np.nan).dropna()
-                        break
-                except Exception:
-                    continue
-
-            if ref_date:
-                try:
-                    trade_df = pykrx_stock.get_market_trading_value_by_ticker(ref_date, market='ALL')
-                    if not trade_df.empty:
-                        if '외국인합계' in trade_df.columns:
-                            result['foreign'] = trade_df['외국인합계']
-                        if '기관합계' in trade_df.columns:
-                            result['inst'] = trade_df['기관합계']
-                except Exception as e:
-                    logger.debug(f"XS 수급 데이터 실패: {e}")
-
-            self._market_cache[cache_key] = {'data': result, 'date': today_str}
-            logger.info(f"XS 시장 데이터 캐시 완료 (기준일: {ref_date}, {len(result)}개 시리즈)")
+            import yfinance as yf
+            raw = yf.download(['^VIX', '^GSPC'], period='2y', progress=False)
+            if not raw.empty:
+                close = raw.xs('Close', level=0, axis=1) if isinstance(raw.columns, pd.MultiIndex) else raw['Close']
+                macro = pd.DataFrame(index=close.index)
+                macro.index = pd.to_datetime(macro.index).tz_localize(None)
+                macro['vix_level']     = close['^VIX'].values
+                macro['vix_change_5d'] = close['^VIX'].pct_change(5).values
+                macro['sp500_1m']      = close['^GSPC'].pct_change(20).values
+                macro = macro.ffill()
+                self._market_cache['__macro__'] = {'df': macro, 'date': today}
+                return macro
         except Exception as e:
-            logger.warning(f"XS 시장 데이터 수집 실패: {e}")
-
-        return result
-
-    @staticmethod
-    def _xs_rank(value: float, series: pd.Series) -> float:
-        """값의 크로스섹셔널 백분위 순위 (0~100).
-
-        0 = 전체 최하위, 100 = 전체 최상위.
-        값이 없거나 시리즈가 비어 있으면 중립값 50.0 반환.
-        """
-        if value is None or (isinstance(value, float) and np.isnan(value)):
-            return 50.0
-        valid = series.dropna()
-        if valid.empty:
-            return 50.0
-        return round(float((valid < value).sum() / len(valid) * 100), 2)
+            logger.warning(f"Macro data fetch failed: {e}")
+        return pd.DataFrame()
 
     def prepare_features(self, df: pd.DataFrame,
-                         market_df: pd.DataFrame = None) -> pd.DataFrame:
+                         market_df: pd.DataFrame = None,
+                         macro_df: pd.DataFrame = None) -> pd.DataFrame:
         """원본 OHLCV에서 지표를 계산한 뒤 특성(Feature) 생성"""
         if df.empty: return df
         df_ind = indicators.calculate_all(df)
-        return self._extract_features(df_ind, market_df=market_df)
+        return self._extract_features(df_ind, market_df=market_df, macro_df=macro_df)
 
     def _extract_features(self, df: pd.DataFrame,
-                          market_df: pd.DataFrame = None) -> pd.DataFrame:
+                          market_df: pd.DataFrame = None,
+                          macro_df: pd.DataFrame = None) -> pd.DataFrame:
         """이미 지표가 계산된 데이터프레임에서 특성(Feature)만 추출"""
         if df.empty: return df
         feat = pd.DataFrame(index=df.index)
@@ -187,6 +212,7 @@ class StockPredictionModel:
         feat['price_sma_5_ratio'] = df['close'] / df['sma_5']
         feat['rsi_change']        = df['rsi'].diff()
         feat['macd_diff_change']  = df['macd_diff'].diff()
+        feat['macd_slope_5d']     = df['macd_diff'].diff(5)
 
         # ── 볼린저 밴드 ───────────────────────────────
         bb_range = (df['bb_high'] - df['bb_low']).replace(0, np.nan)
@@ -221,8 +247,7 @@ class StockPredictionModel:
         feat['high_52w_ratio']    = df['close'] / df['close'].rolling(config.TRADING_DAYS_PER_YEAR, min_periods=60).max()
         feat['mom_accel']         = feat['return_1m'] - feat['return_3m'] / 3.0
 
-        # ── 시장 상대강도 (신규) ──────────────────────
-        # market_df 없으면 0(중립) 으로 채워 모델 입력 일관성 유지
+        # ── 시장 상대강도 ─────────────────────────────
         if market_df is not None and not market_df.empty:
             aligned = market_df.reindex(feat.index).ffill()
             feat['rs_vs_mkt_1m'] = (feat['return_1m'] - aligned.get('return_1m', 0)).fillna(0)
@@ -231,93 +256,67 @@ class StockPredictionModel:
             feat['rs_vs_mkt_1m'] = 0.0
             feat['rs_vs_mkt_3m'] = 0.0
 
-        # inf(거래량 0, 분모 0 등) → NaN 치환 후 제거
+        # ── 신규 12개 피처 ────────────────────────────
+
+        # ADX 추세 강도 + DI 방향
+        if 'adx' in df.columns:
+            feat['adx'] = df['adx']
+        if 'adx_pos' in df.columns and 'adx_neg' in df.columns:
+            feat['adx_di_diff'] = df['adx_pos'] - df['adx_neg']
+
+        # VWAP 대비 현재가 위치
+        if 'vwap' in df.columns:
+            feat['vwap_ratio'] = (
+                df['close'] / df['vwap'].replace(0, np.nan)
+            ).clip(0.5, 2.0)
+
+        # Donchian Channel 위치
+        if 'dc_high' in df.columns and 'dc_low' in df.columns:
+            dc_range = (df['dc_high'] - df['dc_low']).replace(0, np.nan)
+            feat['dc_position'] = (
+                (df['close'] - df['dc_low']) / dc_range
+            ).clip(0, 1)
+
+        # 거래량 방향성 지표
+        if 'cmf' in df.columns:
+            feat['cmf'] = df['cmf']
+        if 'mfi' in df.columns:
+            feat['mfi'] = df['mfi']
+        if 'rsi' in df.columns and 'mfi' in df.columns:
+            feat['rsi_mfi_div'] = df['rsi'] - df['mfi']
+
+        # Squeeze Momentum (finta)
+        if 'sqzmi' in df.columns:
+            feat['sqzmi']       = df['sqzmi']
+            feat['sqzmi_accel'] = df['sqzmi'].diff().fillna(0)
+
+        # Volume Zone Oscillator (finta)
+        if 'vzo' in df.columns:
+            feat['vzo'] = df['vzo']
+
+        # Fisher Transform (finta)
+        if 'fisher' in df.columns:
+            feat['fisher'] = df['fisher']
+
+        # Williams Fractal 5일 내 강세 프랙탈 (finta)
+        if 'bullish_fractal' in df.columns:
+            feat['bullish_fractal_5d'] = (
+                df['bullish_fractal'].rolling(5, min_periods=1).max()
+            )
+
+        # ── 거시경제 3개 피처 ────────────────────────────────────
+        if macro_df is not None and not macro_df.empty:
+            aligned = macro_df.reindex(feat.index, method='ffill')
+            feat['vix_level']     = aligned.get('vix_level',     pd.Series(dtype=float))
+            feat['vix_change_5d'] = aligned.get('vix_change_5d', pd.Series(dtype=float))
+            feat['sp500_1m']      = aligned.get('sp500_1m',      pd.Series(dtype=float))
+        else:
+            feat['vix_level']     = 20.0
+            feat['vix_change_5d'] = 0.0
+            feat['sp500_1m']      = 0.0
+
+        # inf → NaN 치환 후 제거
         return feat.replace([np.inf, -np.inf], np.nan).dropna()
-
-    def _get_pykrx_features(self, code: str, df: pd.DataFrame) -> Dict[str, float]:
-        """PyKrx에서 해당 종목의 펀더멘털/투자자 피처를 반환 (당일 캐싱).
-
-        XS(크로스섹셔널) 순위 피처는 전체 시장 데이터(_get_xs_market_data)를 기준으로
-        실제 백분위 순위를 계산한다. 시장 데이터 미수신 시 중립값(50.0) 폴백.
-        """
-        from datetime import date as _date
-        today = _date.today().isoformat()
-        cached = self._pykrx_cache.get(code, {})
-        if cached.get('date') == today and 'data' in cached:
-            return cached['data']
-
-        neutral: Dict[str, float] = {
-            'pbr': 1.0, 'per': 15.0, 'div': 1.0,
-            'pbr_xs': 50.0, 'per_xs': 50.0,
-            'foreign_5d_ratio': 0.0, 'inst_5d_ratio': 0.0,
-            'foreign_xs': 50.0, 'inst_xs': 50.0,
-        }
-
-        try:
-            from pykrx import stock as pykrx_stock
-        except ImportError:
-            return neutral
-
-        try:
-            end_dt    = datetime.now()
-            start_dt  = end_dt - timedelta(days=60)
-            start_str = start_dt.strftime('%Y%m%d')
-            end_str   = end_dt.strftime('%Y%m%d')
-
-            result = dict(neutral)
-
-            # 1. 펀더멘털 (PBR, PER, DIV) — 개별 종목 시계열
-            try:
-                fund_df = pykrx_stock.get_market_fundamental_by_date(start_str, end_str, code)
-                fund_df.index = pd.to_datetime(fund_df.index)
-                if not fund_df.empty:
-                    last = fund_df.iloc[-1]
-                    result['pbr'] = float(last.get('PBR', neutral['pbr']))
-                    result['per'] = float(last.get('PER', neutral['per']))
-                    result['div'] = float(last.get('DIV', neutral['div']))
-            except Exception as e:
-                logger.debug(f"[PyKrx] {code} fundamental 실패: {e}")
-
-            # 2. 외국인/기관 5일 누적 순매수 비율 — 개별 종목 시계열
-            foreign_today_raw = 0.0
-            inst_today_raw    = 0.0
-            try:
-                trade_df = pykrx_stock.get_market_trading_value_by_date(start_str, end_str, code)
-                trade_df.index = pd.to_datetime(trade_df.index)
-                if not trade_df.empty and not df.empty:
-                    close_vol   = df['close'].reindex(trade_df.index, method='ffill') * \
-                                  df['volume'].reindex(trade_df.index, method='ffill')
-                    turnover_5d = close_vol.rolling(5, min_periods=1).sum().replace(0, np.nan)
-
-                    if '외국인합계' in trade_df.columns:
-                        foreign_5d = trade_df['외국인합계'].rolling(5, min_periods=1).sum()
-                        ratio = (foreign_5d / turnover_5d).clip(-0.5, 0.5).fillna(0)
-                        if not ratio.empty:
-                            result['foreign_5d_ratio'] = float(ratio.iloc[-1])
-                        foreign_today_raw = float(trade_df['외국인합계'].iloc[-1])
-
-                    if '기관합계' in trade_df.columns:
-                        inst_5d = trade_df['기관합계'].rolling(5, min_periods=1).sum()
-                        ratio   = (inst_5d / turnover_5d).clip(-0.5, 0.5).fillna(0)
-                        if not ratio.empty:
-                            result['inst_5d_ratio'] = float(ratio.iloc[-1])
-                        inst_today_raw = float(trade_df['기관합계'].iloc[-1])
-            except Exception as e:
-                logger.debug(f"[PyKrx] {code} trading 실패: {e}")
-
-            # 3. XS 순위 — 전체 시장 데이터 기준 실제 백분위 계산 (중립 50 하드코딩 제거)
-            xs = self._get_xs_market_data(today)
-            result['pbr_xs']     = self._xs_rank(result['pbr'],         xs.get('pbr',     pd.Series()))
-            result['per_xs']     = self._xs_rank(result['per'],         xs.get('per',     pd.Series()))
-            result['foreign_xs'] = self._xs_rank(foreign_today_raw,     xs.get('foreign', pd.Series()))
-            result['inst_xs']    = self._xs_rank(inst_today_raw,        xs.get('inst',    pd.Series()))
-
-            self._pykrx_cache[code] = {'data': result, 'date': today}
-            return result
-
-        except Exception as e:
-            logger.debug(f"[PyKrx] {code} 피처 수집 실패: {e}")
-            return neutral
 
     def predict(self, code: str, df: pd.DataFrame,
                 df_with_indicators: pd.DataFrame = None,
@@ -340,44 +339,41 @@ class StockPredictionModel:
         except Exception:
             pass
         market_df = self._get_market_df(index_symbol)
+        macro_df  = self._get_macro_df()
         if df_with_indicators is not None:
-            features = self._extract_features(df_with_indicators, market_df=market_df)
+            features = self._extract_features(df_with_indicators, market_df=market_df, macro_df=macro_df)
         else:
-            features = self.prepare_features(df, market_df=market_df)
+            features = self.prepare_features(df, market_df=market_df, macro_df=macro_df)
         if features.empty:
             return {"error": "Insufficient data for ML prediction"}
 
-        latest_x = features.iloc[-1:].values  # shape (1, 22) — 기술적 지표 피처
+        # _FEATURE_COLS 순서로 피처 선택 (학습 시 FEATURE_COLS와 동일 순서)
+        feat_cols = [c for c in _FEATURE_COLS if c in features.columns]
+        latest_x = features[feat_cols].iloc[-1:].values  # shape (1, n_features)
 
-        # PyKrx 피처 9개 추가 (31-피처 신규 모델용)
-        pykrx_feat   = self._get_pykrx_features(code, df)
-        pykrx_values = np.array([[
-            pykrx_feat.get('pbr',              1.0),
-            pykrx_feat.get('per',             15.0),
-            pykrx_feat.get('div',              1.0),
-            pykrx_feat.get('pbr_xs',          50.0),
-            pykrx_feat.get('per_xs',          50.0),
-            pykrx_feat.get('foreign_5d_ratio', 0.0),
-            pykrx_feat.get('inst_5d_ratio',    0.0),
-            pykrx_feat.get('foreign_xs',      50.0),
-            pykrx_feat.get('inst_xs',         50.0),
-        ]])
-        latest_x_full = np.hstack([latest_x, pykrx_values])  # shape (1, 31)
-
-        # RMSE 기반 가중 앙상블: w_i = 1/RMSE_i
+        # AUC 기반 가중 앙상블: w_i = (AUC_i - 0.5)
+        # predict_proba()[:, 1] → P(top 30%) → 0~1 → ×100 → 0~100 점수
         weighted_sum = 0.0
         total_weight = 0.0
         model_count  = 0
         for name, model in self.models.items():
             try:
                 scaler = self.scalers.get(name)
-                # 모델이 31-피처(신규)인지 22-피처(구버전)인지 scaler 크기로 구분
-                n_expected = scaler.n_features_in_ if scaler is not None else _BASE_FEATURE_COUNT
-                x = latest_x_full.copy() if n_expected > _BASE_FEATURE_COUNT else latest_x.copy()
+                x = latest_x.copy()
                 if scaler is not None:
                     x = scaler.transform(x)
-                p = float(model.predict(x)[0])
-                w = self.model_weights.get(name, 1.0)
+                # 분류기: predict_proba → 캘리브레이션(percentile rank) → 0~100
+                if hasattr(model, 'predict_proba'):
+                    p_raw = float(model.predict_proba(x)[0, 1])
+                    cal = self.calibrations.get(name)
+                    if cal:
+                        # np.searchsorted: p_raw가 101분위수 배열 중 몇 번째 분위인지 → 0~100
+                        p = float(np.clip(np.searchsorted(cal, p_raw), 0, 100))
+                    else:
+                        p = p_raw * 100.0
+                else:
+                    p = float(model.predict(x)[0])
+                w = self.model_weights.get(name, 0.05)
                 weighted_sum += p * w
                 total_weight += w
                 model_count  += 1
@@ -386,25 +382,24 @@ class StockPredictionModel:
                 continue
 
         if model_count == 0:
-            # 저장된 모델이 없을 때: tech_score 폴백 → 피처 휴리스틱 순으로 대체
+            # 저장된 모델이 없을 때: tech_score 폴백
             if fallback_score is not None:
                 score = round(float(np.clip(fallback_score, 0.0, 100.0)), 2)
                 logger.warning(f"No ML models loaded for {code}. Using tech_score fallback: {score}")
                 return {"ensemble_score": score, "model_count": 0, "note": "fallback_to_tech_score"}
             else:
                 latest = features.iloc[-1]
-                rsi = float(latest.get('rsi', 50))
                 macd_diff = float(latest.get('macd_diff', 0))
-                price_sma_ratio = float(latest.get('price_sma_20_ratio', 1.0))
-                heuristic = 50.0 + (50.0 - rsi) * 0.3 + (10.0 if macd_diff > 0 else -10.0) + (price_sma_ratio - 1.0) * 50.0
+                atr_ratio = float(latest.get('atr_ratio', 0.02))
+                heuristic = 50.0 + (10.0 if macd_diff > 0 else -10.0) - atr_ratio * 200
                 score = round(float(np.clip(heuristic, 0.0, 100.0)), 2)
                 logger.warning(f"No ML models loaded for {code}. Using feature heuristic fallback: {score}")
                 return {"ensemble_score": score, "model_count": 0, "note": "fallback_heuristic"}
 
-        # RMSE 가중 앙상블 점수 (0~100)
-        tech_ml_score = float(np.clip(weighted_sum / total_weight, 0.0, 100.0))
+        # AUC 가중 앙상블 점수 (0~100): P(top 30%) 확률의 가중평균
+        ensemble_score = float(np.clip(weighted_sum / total_weight, 0.0, 100.0))
         return {
-            "ensemble_score":     round(tech_ml_score, 2),
+            "ensemble_score":     round(ensemble_score, 2),
             "model_count":        model_count,
             "prediction_date":    datetime.now().strftime('%Y-%m-%d'),
         }

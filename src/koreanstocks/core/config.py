@@ -43,7 +43,7 @@ if _env_in_base.exists():
 
 class Config:
     # Version
-    VERSION = "0.3.0"
+    VERSION = "0.3.1"
 
     # Project Root — Step 2에서 결정된 _BASE_DIR 재사용 (중복 호출 방지)
     # - editable install (pip install -e .): __file__ 기준 자동 탐지

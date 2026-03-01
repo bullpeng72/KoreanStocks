@@ -16,9 +16,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import roc_auc_score, log_loss
 import joblib
 import xgboost as xgb
 
@@ -228,54 +229,93 @@ DEFAULT_TRAINING_STOCKS: List[str] = [
 
 # ───────────────────────────── 모델 설정 ─────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────
+# 이진 분류 설정
+# 타깃: 10거래일 후 수익률이 상위 30%이면 1 (매수 신호), 나머지 0
+# 지표: AUC-ROC (랜덤 = 0.5, 목표 ≥ 0.55)
+# ─────────────────────────────────────────────────────────────────────────
+TOP_K_PERCENTILE    = 0.75   # 상위 25% = 1 (rank pct ≥ 0.75)
+BOTTOM_K_PERCENTILE = 0.25   # 하위 25% = 0 (rank pct ≤ 0.25), 중간 50% 제외
+
 MODEL_CONFIGS: Dict[str, dict] = {
     'random_forest': {
-        'class': RandomForestRegressor,
+        'class': RandomForestClassifier,
         'params': dict(
             n_estimators=300, max_depth=4, min_samples_split=20,
-            min_samples_leaf=15, max_features=0.5, random_state=42, n_jobs=-1,
+            min_samples_leaf=20, max_features=0.5,
+            class_weight='balanced', random_state=42, n_jobs=-1,
         ),
     },
     'gradient_boosting': {
-        'class': GradientBoostingRegressor,
+        'class': GradientBoostingClassifier,
         'params': dict(
-            n_estimators=200, learning_rate=0.05, max_depth=3,
-            min_samples_leaf=20, subsample=0.7, random_state=42,
+            n_estimators=200, learning_rate=0.05, max_depth=2,
+            min_samples_leaf=25, subsample=0.7, random_state=42,
         ),
     },
     'xgboost': {
-        'class': xgb.XGBRegressor,
+        'class': xgb.XGBClassifier,
         'params': dict(
-            n_estimators=300, max_depth=3, learning_rate=0.05,
-            subsample=0.7, colsample_bytree=0.7, min_child_weight=15,
-            reg_alpha=0.1, reg_lambda=1.0, random_state=42, verbosity=0,
+            n_estimators=200, max_depth=2, learning_rate=0.05,
+            subsample=0.7, colsample_bytree=0.6, min_child_weight=30,
+            reg_alpha=1.0, reg_lambda=3.0,
+            scale_pos_weight=1.0,   # 중립 구간 제거로 클래스 균형 (50:50)
+            use_label_encoder=False, eval_metric='logloss',
+            random_state=42, verbosity=0,
         ),
     },
 }
 
 BASE_FEATURE_COLS = [
-    'rsi', 'macd_diff', 'price_sma_20_ratio', 'vol_change',
-    'price_sma_5_ratio', 'rsi_change', 'macd_diff_change',
-    'bb_position', 'bb_width', 'vol_ratio',
-    'stoch_k', 'stoch_d', 'cci',
-    'atr_ratio', 'candle_body', 'obv_change',
-    'return_1m', 'return_3m', 'high_52w_ratio', 'mom_accel',
-    'rs_vs_mkt_1m', 'rs_vs_mkt_3m',
-]
+    # ── 변동성 / 추세 강도 ────────────────────────────────────
+    'atr_ratio',            # 변동성 (ATR/가격) — importance 1위
+    'adx',                  # 추세 강도 (방향 무관)
+    'adx_di_diff',          # DI+ - DI- (추세 방향성 — ADX 보완)
+    'bb_width',             # 볼린저 밴드 폭 (변동성 압축 감지)
+    # ── 중기 모멘텀 / 상대강도 ────────────────────────────────
+    'rs_vs_mkt_3m',         # KOSPI 대비 3개월 초과수익
+    'rs_vs_mkt_1m',         # KOSPI 대비 1개월 초과수익
+    'high_52w_ratio',       # 52주 고가 대비 현재가 (추세 위치)
+    'mom_accel',            # 모멘텀 가속도 (1m - 3m/3)
+    # ── 추세 / 가격 모멘텀 ────────────────────────────────────
+    'macd_diff',            # MACD 다이버전스 (추세 전환)
+    'macd_diff_change',     # MACD 다이버전스 변화율
+    'macd_slope_5d',        # MACD 다이버전스 5일 기울기 (모멘텀 가속)
+    'price_sma_5_ratio',    # 단기 추세 (가격/SMA5)
+    # ── 반전/패턴 신호 ────────────────────────────────────────
+    'fisher',               # Fisher Transform (극값=반전)
+    'bullish_fractal_5d',   # Williams 강세 프랙탈 5일
+    # ── 거래량 방향성 ─────────────────────────────────────────
+    'cmf',                  # Chaikin Money Flow (매수/매도 압력)
+    'vzo',                  # Volume Zone Oscillator
+    'obv_change',           # OBV 변화율
+    'vol_ratio',            # 거래량 / 20일 평균 비율
+    'vol_change',           # 거래량 전일 대비 변화율
+    'rsi_mfi_div',          # RSI-MFI 다이버전스 (가격강도 vs 거래량강도)
+    # ── 스퀴즈 모멘텀 ─────────────────────────────────────────
+    'sqzmi',                # Squeeze Momentum (BB 내 MACD 압축 돌파)
+    # ── 캔들 / 단기 신호 ──────────────────────────────────────
+    'candle_body',          # 캔들 실체 (상승/하락 강도)
+    # ── 거시경제 ──────────────────────────────────────────────
+    'vix_level',            # VIX 공포지수
+    'vix_change_5d',        # VIX 5일 변화율
+    'sp500_1m',             # S&P500 1개월 수익률
+]  # 25개 피처
 
 PYKRX_FEATURE_COLS = [
     'pbr', 'per', 'div', 'pbr_xs', 'per_xs',
     'foreign_5d_ratio', 'inst_5d_ratio', 'foreign_xs', 'inst_xs',
 ]
 
-FEATURE_COLS = BASE_FEATURE_COLS + PYKRX_FEATURE_COLS  # 22 + 9 = 31
+FEATURE_COLS = BASE_FEATURE_COLS  # PyKrx 제외 — 현재 수집 불가로 노이즈만 추가
 
 MIN_STOCKS_PER_DATE = 5
 
 # ───────────────────────────── 데이터 수집 ─────────────────────────────
 
 def build_features(df_ind: pd.DataFrame,
-                   market_df: pd.DataFrame = None) -> pd.DataFrame:
+                   market_df: pd.DataFrame = None,
+                   macro_df: pd.DataFrame = None) -> pd.DataFrame:
     """지표 DataFrame에서 모델 입력 특성을 추출 (prediction_model._extract_features와 동일)."""
     feat = pd.DataFrame(index=df_ind.index)
 
@@ -286,6 +326,7 @@ def build_features(df_ind: pd.DataFrame,
     feat['price_sma_5_ratio']  = df_ind['close'] / df_ind['sma_5']
     feat['rsi_change']         = df_ind['rsi'].diff()
     feat['macd_diff_change']   = df_ind['macd_diff'].diff()
+    feat['macd_slope_5d']      = df_ind['macd_diff'].diff(5)
 
     bb_range = (df_ind['bb_high'] - df_ind['bb_low']).replace(0, np.nan)
     feat['bb_position'] = (df_ind['close'] - df_ind['bb_low']) / bb_range
@@ -312,23 +353,116 @@ def build_features(df_ind: pd.DataFrame,
         feat['rs_vs_mkt_1m'] = 0.0
         feat['rs_vs_mkt_3m'] = 0.0
 
+    # ── 신규 12개 피처 ────────────────────────────────────────
+
+    # ADX 추세 강도 + DI 방향 차이
+    feat['adx']         = df_ind['adx']
+    feat['adx_di_diff'] = df_ind['adx_pos'] - df_ind['adx_neg']
+
+    # VWAP 대비 현재가 위치 (기관 평균매수가 기준선)
+    feat['vwap_ratio'] = (
+        df_ind['close'] / df_ind['vwap'].replace(0, np.nan)
+    ).clip(0.5, 2.0)
+
+    # Donchian Channel 위치 — 0=20일 최저가, 1=20일 최고가 (신고가 돌파 모멘텀)
+    dc_range = (df_ind['dc_high'] - df_ind['dc_low']).replace(0, np.nan)
+    feat['dc_position'] = (
+        (df_ind['close'] - df_ind['dc_low']) / dc_range
+    ).clip(0, 1)
+
+    # 거래량 방향성 지표
+    feat['cmf']         = df_ind['cmf']
+    feat['mfi']         = df_ind['mfi']
+    feat['rsi_mfi_div'] = df_ind['rsi'] - df_ind['mfi']   # 양수=가격 강도>거래량 강도
+
+    # Squeeze Momentum (finta) — 스퀴즈 돌파 신호
+    feat['sqzmi']       = df_ind['sqzmi']
+    feat['sqzmi_accel'] = df_ind['sqzmi'].diff().fillna(0)  # 모멘텀 가속도
+
+    # Volume Zone Oscillator (finta)
+    feat['vzo']    = df_ind['vzo']
+
+    # Fisher Transform (finta) — 극값=반전 신호, -5~+5 클리핑 적용됨
+    feat['fisher'] = df_ind['fisher']
+
+    # Williams Fractal 5일 내 강세 프랙탈 여부 (finta)
+    feat['bullish_fractal_5d'] = (
+        df_ind['bullish_fractal'].rolling(5, min_periods=1).max()
+    )
+
+    # ── 거시경제 3개 피처 ────────────────────────────────────
+    if macro_df is not None and not macro_df.empty:
+        aligned = macro_df.reindex(feat.index, method='ffill')
+        feat['vix_level']     = aligned.get('vix_level',     pd.Series(dtype=float))
+        feat['vix_change_5d'] = aligned.get('vix_change_5d', pd.Series(dtype=float))
+        feat['sp500_1m']      = aligned.get('sp500_1m',      pd.Series(dtype=float))
+    else:
+        feat['vix_level']     = 20.0   # VIX 역사적 평균 근처
+        feat['vix_change_5d'] = 0.0
+        feat['sp500_1m']      = 0.0
+
     return feat.replace([np.inf, -np.inf], np.nan).dropna()
 
 
-def _fetch_market_returns(symbol: str, period: str) -> pd.DataFrame:
-    """시장 지수의 롤링 수익률 DataFrame 반환 (시장 상대강도 피처 계산용)."""
+def _fetch_macro_data(period: str) -> pd.DataFrame:
+    """yfinance로 VIX·S&P500 거시경제 데이터 수집 (학습 전 1회 호출).
+
+    Returns: DataFrame(vix_level, vix_change_5d, sp500_1m), 인덱스=날짜(tz-naive)
+    """
     try:
-        raw = data_provider.get_ohlcv(symbol, period=period)
+        import yfinance as yf
+        raw = yf.download(['^VIX', '^GSPC'], period=period, progress=False)
         if raw.empty:
             return pd.DataFrame()
-        mkt = pd.DataFrame(index=raw.index)
-        mkt['return_1m'] = raw['close'].pct_change(20)
-        mkt['return_3m'] = raw['close'].pct_change(60)
-        logger.info(f"  [시장] {symbol} 수익률 데이터 {len(mkt)}개 로드 완료")
-        return mkt
+        close = raw.xs('Close', level=0, axis=1) if isinstance(raw.columns, pd.MultiIndex) else raw['Close']
+        macro = pd.DataFrame(index=close.index)
+        macro.index = pd.to_datetime(macro.index).tz_localize(None)
+        macro['vix_level']     = close['^VIX'].values
+        macro['vix_change_5d'] = close['^VIX'].pct_change(5).values
+        macro['sp500_1m']      = close['^GSPC'].pct_change(20).values
+        macro = macro.ffill()
+        logger.info(f"  [거시경제] VIX·S&P500 {len(macro)}개 데이터 로드 완료")
+        return macro
     except Exception as e:
-        logger.warning(f"  [시장] {symbol} 데이터 로드 실패: {e}")
+        logger.warning(f"  [거시경제] VIX·S&P500 수집 실패: {e} — macro 피처는 0으로 채워집니다.")
         return pd.DataFrame()
+
+
+def _fetch_market_returns(symbol: str, period: str) -> pd.DataFrame:
+    """시장 지수의 롤링 수익률 DataFrame 반환 (시장 상대강도 피처 계산용).
+
+    FDR(KS11) 실패 시 yfinance ^KS11 로 폴백.
+    """
+    try:
+        raw = data_provider.get_ohlcv(symbol, period=period)
+        if not raw.empty:
+            mkt = pd.DataFrame(index=raw.index)
+            mkt['return_1m'] = raw['close'].pct_change(20)
+            mkt['return_3m'] = raw['close'].pct_change(60)
+            logger.info(f"  [시장] {symbol} 수익률 데이터 {len(mkt)}개 로드 완료")
+            return mkt
+    except Exception as e:
+        logger.warning(f"  [시장] {symbol} FDR 로드 실패: {e}")
+
+    # ── yfinance 폴백 ─────────────────────────────────────────
+    yf_map = {'KS11': '^KS11', 'KQ11': '^KQ11'}
+    yf_sym = yf_map.get(symbol)
+    if yf_sym:
+        try:
+            import yfinance as yf
+            raw = yf.download(yf_sym, period=period, progress=False)
+            if not raw.empty:
+                close = raw.xs('Close', level=0, axis=1).iloc[:, 0] \
+                    if isinstance(raw.columns, pd.MultiIndex) else raw['Close']
+                close.index = pd.to_datetime(close.index).tz_localize(None)
+                mkt = pd.DataFrame(index=close.index)
+                mkt['return_1m'] = close.pct_change(20)
+                mkt['return_3m'] = close.pct_change(60)
+                logger.info(f"  [시장] {yf_sym} (yfinance 폴백) {len(mkt)}개 로드 완료")
+                return mkt
+        except Exception as e2:
+            logger.warning(f"  [시장] {yf_sym} yfinance 폴백도 실패: {e2}")
+    return pd.DataFrame()
 
 
 def _fetch_pykrx_all_stocks(codes: List[str], period: str) -> Dict[str, Dict]:
@@ -336,14 +470,19 @@ def _fetch_pykrx_all_stocks(codes: List[str], period: str) -> Dict[str, Dict]:
     cache_key  = hashlib.md5((','.join(sorted(codes)) + period).encode()).hexdigest()[:8]
     cache_file = os.path.join(PYKRX_CACHE_DIR, f"pykrx_cache_{cache_key}.pkl")
 
+    _CACHE_TTL_DAYS = 7
     if os.path.exists(cache_file):
-        try:
-            with open(cache_file, 'rb') as f:
-                cached = pickle.load(f)
-            logger.info(f"[PyKrx] 캐시 로드: {cache_file} ({len(cached)}종목)")
-            return cached
-        except Exception as e:
-            logger.warning(f"[PyKrx] 캐시 로드 실패: {e}, 재수집합니다.")
+        age_days = (datetime.now().timestamp() - os.path.getmtime(cache_file)) / 86400
+        if age_days <= _CACHE_TTL_DAYS:
+            try:
+                with open(cache_file, 'rb') as f:
+                    cached = pickle.load(f)
+                logger.info(f"[PyKrx] 캐시 로드: {cache_file} ({len(cached)}종목, {age_days:.1f}일 전)")
+                return cached
+            except Exception as e:
+                logger.warning(f"[PyKrx] 캐시 로드 실패: {e}, 재수집합니다.")
+        else:
+            logger.info(f"[PyKrx] 캐시 만료 ({age_days:.1f}일 > {_CACHE_TTL_DAYS}일) — 재수집합니다.")
 
     try:
         from pykrx import stock as pykrx_stock
@@ -389,7 +528,8 @@ def _fetch_pykrx_all_stocks(codes: List[str], period: str) -> Dict[str, Dict]:
 
 def _collect_stock_features(code: str, period: str, future_days: int,
                              market_df: pd.DataFrame = None,
-                             pykrx_cache: Optional[Dict] = None) -> pd.DataFrame:
+                             pykrx_cache: Optional[Dict] = None,
+                             macro_df: pd.DataFrame = None) -> pd.DataFrame:
     """단일 종목의 (날짜, 특성, 미래수익률) DataFrame 반환."""
     try:
         df = data_provider.get_ohlcv(code, period=period)
@@ -401,7 +541,7 @@ def _collect_stock_features(code: str, period: str, future_days: int,
         if df_ind.empty:
             return pd.DataFrame()
 
-        feat = build_features(df_ind, market_df=market_df)
+        feat = build_features(df_ind, market_df=market_df, macro_df=macro_df)
         if len(feat) <= future_days:
             return pd.DataFrame()
 
@@ -449,12 +589,17 @@ def fetch_train_test_samples(
         logger.warning("KS11 시장 데이터 미수신 — rs_vs_mkt 피처는 0으로 채워집니다.")
         market_df = None
 
+    logger.info("[거시경제] VIX·S&P500 데이터 수집 중...")
+    macro_df = _fetch_macro_data(period)
+    if macro_df.empty:
+        macro_df = None
+
     logger.info("[PyKrx] 펀더멘털/투자자 데이터 수집 중...")
     pykrx_cache = _fetch_pykrx_all_stocks(codes, period)
     if not pykrx_cache:
         logger.warning("[PyKrx] 데이터 없음 — 펀더멘털/투자자 피처는 중립값으로 처리됩니다.")
 
-    frames = [_collect_stock_features(c, period, future_days, market_df, pykrx_cache)
+    frames = [_collect_stock_features(c, period, future_days, market_df, pykrx_cache, macro_df)
               for c in codes]
     frames = [f for f in frames if not f.empty]
 
@@ -477,7 +622,13 @@ def fetch_train_test_samples(
         else:
             df_all[col] = 50.0
 
-    df_all['target'] = df_all.groupby(df_all.index)['raw_return'].rank(pct=True) * 100.0
+    # 이진 타깃 (중립 구간 제거): 상위 25% = 1, 하위 25% = 0, 중간 50% 제외
+    rank_pct = df_all.groupby(df_all.index)['raw_return'].rank(pct=True)
+    df_all['target'] = np.nan
+    df_all.loc[rank_pct >= TOP_K_PERCENTILE,    'target'] = 1
+    df_all.loc[rank_pct <= BOTTOM_K_PERCENTILE, 'target'] = 0
+    df_all = df_all.dropna(subset=['target'])
+    df_all['target'] = df_all['target'].astype(int)
 
     stocks_per_date = df_all.groupby(df_all.index)['raw_return'].count()
     valid_dates     = stocks_per_date[stocks_per_date >= MIN_STOCKS_PER_DATE].index
@@ -492,34 +643,45 @@ def fetch_train_test_samples(
     df_train  = df_all[df_all.index <  split_date][keep_cols].dropna()
     df_test   = df_all[df_all.index >= split_date][keep_cols].dropna()
 
+    pos_rate = df_train['target'].mean()
     logger.info(
-        f"\n타깃: 크로스섹셔널 퍼센타일 순위 (0~100)"
+        f"\n타깃: {future_days}거래일 후 수익률 상위 25% = 1 / 하위 25% = 0 (중간 50% 제외)"
         f"\n분할 기준일: {split_date.date()}"
         f"\n총 날짜: {n_dates} (학습 {split_idx}일 / 검증 {n_dates - split_idx}일)"
         f"\n총 샘플: 학습 {len(df_train)} / 검증 {len(df_test)}"
-        f"\n날짜별 평균 종목 수: {stocks_per_date[valid_dates].mean():.1f}"
+        f"\n날짜별 평균 레이블 종목 수: {stocks_per_date[valid_dates].mean():.1f}"
+        f"\n학습 양성 비율: {pos_rate:.1%} (≈50%)"
     )
     return df_train, df_test
 
 
 def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
-    """모델 학습 → 평가 → 모델/스케일러/파라미터 저장."""
+    """모델 학습(이진 분류) → 평가 → 모델/스케일러/파라미터 저장.
+
+    타깃: 10거래일 후 수익률 상위 25% = 1 / 하위 25% = 0 (중간 50% 제외, 이진 분류)
+    지표: AUC-ROC (랜덤 기준선 0.5, 목표 ≥ 0.52)
+    교차검증: 5-fold TimeSeriesSplit (날짜 기준 분할, cross-sectional 무결성 보장)
+    """
     os.makedirs(MODEL_DIR,  exist_ok=True)
     os.makedirs(PARAMS_DIR, exist_ok=True)
 
-    X_train = df_train[FEATURE_COLS].values
+    feat_names = [c for c in FEATURE_COLS if c in df_train.columns]
+    X_train = df_train[feat_names].values
     y_train = df_train['target'].values
 
     if df_test.empty:
         logger.warning("검증 세트가 없습니다. 학습 세트 성능만 기록됩니다.")
         X_test, y_test = X_train, y_train
     else:
-        X_test = df_test[FEATURE_COLS].values
+        X_test = df_test[feat_names].values
         y_test = df_test['target'].values
 
-    baseline_rmse = np.sqrt(np.mean((y_test - y_train.mean()) ** 2))
-    logger.info(f"\n기준선 RMSE: {baseline_rmse:.4f}")
-    logger.info(f"학습 샘플: {len(X_train)}, 검증 샘플: {len(X_test)}\n")
+    pos_rate = y_train.mean()
+    logger.info(f"\n기준선 AUC: 0.5000  (랜덤 분류기)")
+    logger.info(f"학습 샘플: {len(X_train)}, 검증 샘플: {len(X_test)}, 양성 비율: {pos_rate:.1%}\n")
+
+    # 날짜 목록 (TimeSeriesSplit 기준)
+    unique_dates = sorted(df_train.index.unique())
 
     results = []
     for name, cfg in MODEL_CONFIGS.items():
@@ -527,6 +689,26 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
         logger.info(f"  학습 중: {name}")
         t0 = time.time()
 
+        # ── H: 5-fold TimeSeriesSplit 교차검증 (날짜 기준 분할) ──────────────
+        tscv     = TimeSeriesSplit(n_splits=5)
+        cv_aucs  = []
+        for tr_d_idx, val_d_idx in tscv.split(unique_dates):
+            tr_dates  = {unique_dates[i] for i in tr_d_idx}
+            val_dates = {unique_dates[i] for i in val_d_idx}
+            tr_mask   = df_train.index.isin(tr_dates)
+            val_mask  = df_train.index.isin(val_dates)
+            if tr_mask.sum() < 10 or val_mask.sum() < 10:
+                continue
+            cv_sc = StandardScaler()
+            cv_m  = cfg['class'](**cfg['params'])
+            cv_m.fit(cv_sc.fit_transform(X_train[tr_mask]), y_train[tr_mask])
+            cv_p  = cv_m.predict_proba(cv_sc.transform(X_train[val_mask]))[:, 1]
+            cv_aucs.append(roc_auc_score(y_train[val_mask], cv_p))
+        cv_mean = float(np.mean(cv_aucs)) if cv_aucs else float('nan')
+        cv_std  = float(np.std(cv_aucs))  if cv_aucs else float('nan')
+        logger.info(f"  CV AUC (5-fold TS): {cv_mean:.4f} ± {cv_std:.4f}")
+
+        # ── 최종 모델 학습 (전체 학습 세트 사용) ─────────────────────────────
         scaler = StandardScaler()
         X_tr   = scaler.fit_transform(X_train)
         X_te   = scaler.transform(X_test)
@@ -535,14 +717,19 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
         model.fit(X_tr, y_train)
         duration = time.time() - t0
 
-        train_r2  = r2_score(y_train, model.predict(X_tr))
-        y_pred    = model.predict(X_te)
-        rmse      = np.sqrt(mean_squared_error(y_test, y_pred))
-        r2        = r2_score(y_test, y_pred)
-        improvement = (baseline_rmse - rmse) / baseline_rmse * 100
+        # AUC-ROC 평가
+        train_proba = model.predict_proba(X_tr)[:, 1]
+        test_proba  = model.predict_proba(X_te)[:, 1]
+        # 캘리브레이션: 테스트 확률의 101분위수 저장 → predict 시 0~100 균등 스케일로 변환
+        # train_proba 기준이면 과적합 분포(0.13~0.87)가 되어 실제 예측 범위를 반영 못 함
+        calibration_points = np.percentile(test_proba, np.arange(0, 101)).tolist()
+        train_auc   = roc_auc_score(y_train, train_proba)
+        test_auc    = roc_auc_score(y_test,  test_proba)
+        test_logloss = log_loss(y_test, test_proba)
+        overfit_gap  = round(train_auc - test_auc, 4)
 
-        logger.info(f"  RMSE: {rmse:.4f}  (기준선 대비 {improvement:+.2f}%)")
-        logger.info(f"  R²  : {r2:.4f}  (학습 R²: {train_r2:.4f}  과적합 gap: {train_r2 - r2:.4f})")
+        logger.info(f"  AUC : {test_auc:.4f}  (학습 AUC: {train_auc:.4f}  과적합 gap: {overfit_gap:.4f})")
+        logger.info(f"  LogLoss: {test_logloss:.4f}")
         logger.info(f"  소요: {duration:.1f}초")
 
         model_path  = os.path.join(MODEL_DIR, f"{name}_model.pkl")
@@ -552,29 +739,68 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
         logger.info(f"  저장: {model_path}")
         logger.info(f"  저장: {scaler_path}")
 
+        from koreanstocks.core.engine.prediction_model import _MIN_MODEL_AUC
+        quality_pass = test_auc >= _MIN_MODEL_AUC
+        if quality_pass:
+            logger.info(f"  ✅ 품질 게이트 통과 (test_auc={test_auc:.4f} ≥ {_MIN_MODEL_AUC})")
+        else:
+            logger.warning(
+                f"  ⚠️  품질 게이트 미달 (test_auc={test_auc:.4f} < {_MIN_MODEL_AUC}) "
+                f"— 저장은 하지만 예측 시 tech_score 폴백이 사용됩니다."
+            )
+
+        # Feature importance 추출
+        feature_importances = []
+        if hasattr(model, 'feature_importances_') and len(feat_names) == len(model.feature_importances_):
+            fi_pairs = sorted(
+                zip(feat_names, model.feature_importances_.tolist()),
+                key=lambda x: x[1], reverse=True,
+            )
+            feature_importances = [[n, round(v, 6)] for n, v in fi_pairs]
+            top5 = ', '.join(f"{n}({v:.3f})" for n, v in fi_pairs[:5])
+            logger.info(f"  Top-5 피처: {top5}")
+
         version = f"{name}_v{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         meta = {
             "parameters": {k: v for k, v in cfg['params'].items()
-                           if k not in ('random_state', 'n_jobs', 'verbosity')},
-            "training_samples":        int(len(X_train)),
-            "test_rmse":               round(rmse, 4),
-            "test_r2":                 round(r2, 4),
-            "training_duration":       round(duration, 1),
-            "performance_improvement": round(improvement, 2),
-            "saved_at":                datetime.now().isoformat(),
-            "model_version":           version,
+                           if k not in ('random_state', 'n_jobs', 'verbosity',
+                                        'use_label_encoder', 'eval_metric')},
+            "model_type":          "binary_classifier",
+            "target_definition":   (
+                f"top {int((1-TOP_K_PERCENTILE)*100)}% / "
+                f"bottom {int(BOTTOM_K_PERCENTILE*100)}% return in {10}d (neutral zone)"
+            ),
+            "training_samples":    int(len(X_train)),
+            "positive_rate":       round(float(pos_rate), 4),
+            "cv_auc_mean":         round(cv_mean, 4) if not np.isnan(cv_mean) else None,
+            "cv_auc_std":          round(cv_std,  4) if not np.isnan(cv_std)  else None,
+            "train_auc":           round(train_auc,   4),
+            "test_auc":            round(test_auc,    4),
+            "test_logloss":        round(test_logloss, 4),
+            "overfit_gap":         overfit_gap,
+            "quality_pass":        quality_pass,
+            "training_duration":   round(duration, 1),
+            "saved_at":            datetime.now().isoformat(),
+            "model_version":       version,
+            "feature_importances": feature_importances,
+            "calibration":         calibration_points,
         }
         params_path = os.path.join(PARAMS_DIR, f"{name}_params.json")
         with open(params_path, 'w', encoding='utf-8') as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
 
-        results.append((name, rmse, r2, improvement))
+        results.append((name, test_auc, cv_mean, train_auc, quality_pass))
 
-    logger.info(f"\n{'═'*40}")
-    logger.info("  학습 완료 요약")
-    logger.info(f"{'─'*40}")
-    for name, rmse, r2, imp in results:
-        logger.info(f"  {name:<22} RMSE={rmse:.4f}  R²={r2:.4f}  개선={imp:+.2f}%")
+    logger.info(f"\n{'═'*60}")
+    logger.info("  학습 완료 요약  (이진 분류 / AUC-ROC)")
+    logger.info(f"{'─'*60}")
+    logger.info(f"  {'모델':<22} {'test AUC':>9} {'CV AUC':>9} {'train AUC':>9} {'갭':>6} {'품질'}")
+    logger.info(f"{'─'*60}")
+    for name, tauc, cv_mu, trauc, qpass in results:
+        gap    = trauc - tauc
+        mark   = "✅" if qpass else "⚠️ "
+        cv_str = f"{cv_mu:.4f}" if not np.isnan(cv_mu) else "   N/A"
+        logger.info(f"  {name:<22} {tauc:>9.4f} {cv_str:>9} {trauc:>9.4f} {gap:>6.4f}  {mark}")
     logger.info(f"{'═'*40}")
     logger.info(f"✅ 모든 모델 저장 완료  →  {MODEL_DIR}")
 
@@ -583,7 +809,7 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
 
 def run_training(
     period: str = "2y",
-    future_days: int = 5,
+    future_days: int = 10,
     stocks: Optional[List[str]] = None,
     test_ratio: float = 0.2,
 ) -> None:
@@ -591,7 +817,7 @@ def run_training(
 
     Args:
         period:      학습 데이터 기간 (예: '2y', '1y')
-        future_days: 예측 대상 거래일 수
+        future_days: 예측 대상 거래일 수 (기본값 10 = 2주, 중기 노이즈 최소화)
         stocks:      학습 종목 코드 리스트 (None이면 DEFAULT_TRAINING_STOCKS 사용)
         test_ratio:  검증 세트 비율 (0~1)
     """
@@ -609,8 +835,8 @@ def run_training(
     logger.info(f"  데이터 기간 : {period}")
     logger.info(f"  예측 기간   : {future_days}거래일 후")
     logger.info(f"  검증 비율   : {test_ratio * 100:.0f}% (시계열 후반부)")
-    logger.info(f"  타깃 변수   : {future_days}거래일 후 크로스섹셔널 퍼센타일 순위")
-    logger.info(f"  피처 수     : {len(FEATURE_COLS)}개 (기술적{len(BASE_FEATURE_COLS)} + PyKrx{len(PYKRX_FEATURE_COLS)})")
+    logger.info(f"  타깃 변수   : {future_days}거래일 후 수익률 상위 25%/하위 25% 이진 분류 (중간 50% 제외, AUC-ROC)")
+    logger.info(f"  피처 수     : {len(FEATURE_COLS)}개 (기술적+TA+거시경제)")
     logger.info("=" * 40)
 
     logger.info("\n[1/2] 학습 데이터 수집 중...")

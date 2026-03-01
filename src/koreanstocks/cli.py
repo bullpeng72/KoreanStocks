@@ -219,17 +219,18 @@ def analyze(
 @app.command()
 def train(
     period: str = typer.Option("2y", help="학습 데이터 기간: 1y | [cyan]2y[/cyan]"),
-    future_days: int = typer.Option(5, help="예측 대상 거래일 수"),
+    future_days: int = typer.Option(10, help="예측 대상 거래일 수 (기본 10 = 2주, 중기 노이즈 최소화)"),
     test_ratio: float = typer.Option(0.2, help="검증 세트 비율 (0~1)"),
 ):
     """
     [bold]ML 모델 재학습[/bold] — RandomForest·GradientBoosting·XGBoost 앙상블
 
-    [bold]사용 피처 (31개):[/bold]
-    [dim]  기술지표 22개 — RSI, MACD, BB, Stochastic, CCI, ATR 등[/dim]
+    [bold]사용 피처 (46개):[/bold]
+    [dim]  기술지표 34개 — RSI, MACD, BB, ADX, VWAP, CMF, MFI, SQZMI 등[/dim]
+    [dim]  거시경제 3개  — VIX 레벨/변화율, S&P500 1개월 수익률[/dim]
     [dim]  PyKrx 9개    — PBR, PER, DIV + 외국인/기관 5일 순매수 비율[/dim]
 
-    [bold]타깃:[/bold] 5거래일 후 크로스섹셔널 퍼센타일 순위 (0~100)
+    [bold]타깃:[/bold] 10거래일(2주) 후 수익률 상위 30% 이진 분류 (AUC-ROC ≥ 0.55)
 
     [bold]예시:[/bold]
     [dim]  koreanstocks train[/dim]
