@@ -16,19 +16,17 @@ from koreanstocks.core.data.database import db_manager
 
 logger = logging.getLogger(__name__)
 
-# 예측 시 사용할 피처 목록 — trainer.py BASE_FEATURE_COLS와 동기화 필수 (25개)
+# 예측 시 사용할 피처 목록 — trainer.py BASE_FEATURE_COLS와 동기화 필수 (18개)
 _FEATURE_COLS = [
     'atr_ratio', 'adx', 'adx_di_diff', 'bb_width',
-    'rs_vs_mkt_3m', 'rs_vs_mkt_1m', 'high_52w_ratio', 'mom_accel',
-    'macd_diff', 'macd_diff_change', 'macd_slope_5d', 'price_sma_5_ratio',
+    'rs_vs_mkt_3m', 'high_52w_ratio', 'mom_accel',
+    'macd_diff', 'macd_slope_5d', 'price_sma_5_ratio',
     'fisher', 'bullish_fractal_5d',
-    'cmf', 'vzo', 'obv_change', 'vol_ratio', 'vol_change', 'rsi_mfi_div',
-    'sqzmi',
-    'candle_body',
+    'cmf', 'vzo', 'vol_ratio',
     'vix_level', 'vix_change_5d', 'sp500_1m',
 ]
-# 구버전(22/34/37/23) 구분용 문서 상수 (코드 로직에서는 _FEATURE_COLS 컬럼명 선택 사용)
-_BASE_FEATURE_COUNT = 25
+# 구버전(22/34/37/23/25) 구분용 문서 상수 (코드 로직에서는 _FEATURE_COLS 컬럼명 선택 사용)
+_BASE_FEATURE_COUNT = 18
 # AUC 가중치 하한선: AUC 기반 가중치 = (AUC - 0.5) / 상수
 # AUC=0.55 → weight=0.05, AUC=0.60 → weight=0.10 (최대 2배 차이 허용)
 _AUC_WEIGHT_FLOOR = 0.50   # AUC - 0.5가 이 값 이하면 weight=0 처리

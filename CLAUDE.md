@@ -39,10 +39,11 @@ src/
     │       ├── analysis.py          # GET/POST /api/analysis/{code}
     │       ├── watchlist.py         # CRUD /api/watchlist
     │       ├── backtest.py          # GET /api/backtest
-    │       └── market.py            # GET /api/market
+    │       ├── market.py            # GET /api/market
+    │       └── models.py            # GET /api/model_health
     ├── static/
     │   ├── index.html               # Reveal.js 일일 브리핑 슬라이드
-    │   ├── dashboard.html           # 인터랙티브 대시보드 (5탭)
+    │   ├── dashboard.html           # 인터랙티브 대시보드 (6탭)
     │   ├── js/
     │   │   ├── slides.js            # 슬라이드 동적 생성 (API fetch)
     │   │   └── dashboard.js         # 대시보드 인터랙션

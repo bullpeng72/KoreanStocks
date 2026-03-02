@@ -158,7 +158,7 @@ def serve(
 
     [bold]제공 URL:[/bold]
     [green]  /[/green]          일일 브리핑 슬라이드 (Reveal.js)
-    [green]  /dashboard[/green] 인터랙티브 대시보드 (5탭)
+    [green]  /dashboard[/green] 인터랙티브 대시보드 (6탭)
     [green]  /docs[/green]      API 문서 (Swagger UI)
 
     [bold]예시:[/bold]
@@ -264,9 +264,9 @@ def train(
     """
     [bold]ML 모델 재학습[/bold] — RandomForest·GradientBoosting·XGBoost 앙상블
 
-    [bold]사용 피처 (25개):[/bold]
-    [dim]  기술지표 22개 — ATR, ADX, BB, MACD, CMF, VZO, OBV, SQZMI, Fisher 등[/dim]
-    [dim]  시장·거시 3개  — 시장 상대강도 1m/3m, VIX 레벨/변화율, S&P500 1m[/dim]
+    [bold]사용 피처 (18개):[/bold]
+    [dim]  기술지표 15개 — ATR, ADX, BB, MACD, CMF, VZO, Fisher, vol_ratio 등[/dim]
+    [dim]  시장·거시 3개  — 시장 상대강도 3m, VIX 레벨/변화율, S&P500 1m[/dim]
 
     [bold]타깃:[/bold] 10거래일 후 수익률 상위 25%/하위 25% 이진 분류 (중간 50% neutral zone 제외)
 

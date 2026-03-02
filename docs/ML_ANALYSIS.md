@@ -163,8 +163,8 @@ df_all = df_all.dropna(subset=['target'])     # 중간 50% 제외
 3. 종목별 OHLCV 수집 + 지표 계산 + 피처 생성 (18개)
 4. 전 종목 concat → 날짜별 크로스섹셔널 순위 → 이진 타깃 산출
    (상위 25% = 1, 하위 25% = 0, 중간 50% 제외)
-5. 시계열 분할 (앞 80% → 학습 / 뒤 20% → 검증)
-6. 5-fold TimeSeriesSplit CV (날짜 단위, 미래 누출 방지)
+5. 시계열 분할 (앞 80% → 학습 / 뒤 20% → 검증, 경계 Purging 10거래일 적용)
+6. 5-fold TimeSeriesSplit CV (날짜 단위, fold 경계마다 Purging 10거래일 적용)
 7. StandardScaler 정규화 → 모델 학습 → pkl 저장
 8. test_proba 101분위수 배열(캘리브레이션) → JSON 저장
 ```
@@ -196,16 +196,35 @@ for tr_d_idx, val_d_idx in tscv.split(unique_dates):
     # StandardScaler 재학습 + 모델 학습 + AUC 계산
 ```
 
-### 학습 데이터 현황 (v0.3.1 기준)
+### CV Purging (미래 누출 방지)
+
+각 fold의 val 시작일 직전 `purging_days`(기본 10) 거래일을 학습 세트에서 제거하여
+학습·검증 경계 근처의 데이터가 양쪽에 동시에 노출되는 문제를 방지한다.
+
+```python
+date_to_pos = {d: i for i, d in enumerate(unique_dates)}
+val_start   = min(val_dates)
+val_start_pos = date_to_pos[val_start]
+purge_boundary = max(0, val_start_pos - purging_days)
+purge_cutoff   = unique_dates[purge_boundary]
+tr_mask = tr_mask & (df_train.index < purge_cutoff)
+```
+
+학습/검증 전체 분할에도 동일한 purging이 적용된다:
+- 전체 분할 경계(`split_date`) 직전 10거래일을 학습 세트에서 제거
+- 이로 인해 약 720개 샘플이 제거됨 (2025-10 경계 구간)
+
+### 학습 데이터 현황 (v0.3.2 기준)
 
 | 항목 | 값 |
 |------|----|
-| 학습 종목 | 약 144개 (KOSPI + KOSDAQ 대표주·중형주) |
+| 학습 종목 | 146개 (KOSPI200+KOSDAQ150 폴백, DEFAULT_TRAINING_STOCKS) |
 | 데이터 기간 | 2년 (`--period 2y`) |
-| 학습 샘플 (neutral zone 제외) | 약 21,996 |
-| 검증 샘플 | 약 5,499 |
-| 양성 비율 | 약 50.7% (중립 구간 제외로 균형) |
+| 학습 샘플 (neutral zone 제외) | 21,276 |
+| 검증 샘플 | 5,499 |
+| 양성 비율 | 50.69% (중립 구간 제외로 균형) |
 | 분할 기준일 | ≈ 2025-10 (재학습 시마다 변동) |
+| Purging 일수 | 10거래일 (학습/검증 경계 누출 방지) |
 | 피처 수 | 18개 |
 
 ---
@@ -249,13 +268,13 @@ p = float(np.clip(np.searchsorted(calibration, p_raw), 0, 100))
 
 ## 7. 성능 지표
 
-> 학습일: 2026-03-01 / 검증 기간: ≈ 2025-10 이후 약 5개월
+> 학습일: 2026-03-02 / 검증 기간: ≈ 2025-10 이후 약 5개월
 
 | 모델 | test AUC | CV AUC (5-fold TS) | train AUC | 과적합 gap |
 |------|----------|-------------------|----------|-----------|
-| Random Forest | **0.5600** | 0.5119 ± 0.0238 | 0.6505 | 0.0905 |
-| Gradient Boosting | **0.5687** | 0.5180 ± 0.0287 | 0.6601 | 0.0914 |
-| XGBoost | **0.5671** | 0.5179 ± 0.0271 | 0.6435 | 0.0764 |
+| Random Forest | **0.5759** | 0.5074 ± 0.0307 | 0.6492 | 0.0733 |
+| Gradient Boosting | **0.5849** | 0.5144 ± 0.0288 | 0.6592 | 0.0743 |
+| XGBoost | **0.5769** | 0.5159 ± 0.0302 | 0.6485 | 0.0716 |
 | 기준선 (랜덤 분류기) | 0.5000 | — | — | — |
 
 > **해석:** 이진 분류의 AUC 0.52~0.57은 랜덤(0.50) 대비 유의미한 수준이다.
@@ -269,7 +288,7 @@ p = float(np.clip(np.searchsorted(calibration, p_raw), 0, 100))
 | PyKrx 제외 + 방향성 피처 추가 | 25 | 이진 분류 (상위 30%/하위 70%) | 0.5176 |
 | Neutral Zone 타깃 (v0.3.0) | 25 | 상위 25%/하위 25%, 중간 50% 제외 | **0.5600** |
 | XGBoost 과적합 감소 (v0.3.1) | 25 | 동일 | **0.5600** (XGB: 0.5558→0.5671) |
-| 피처 정제 + 학습 종목 확대 (v0.3.2) | 18 | 동일 | TBD (재학습 후 업데이트) |
+| 피처 정제 + CV Purging 적용 (v0.3.2) | 18 | 동일 | **0.5759** |
 
 ---
 

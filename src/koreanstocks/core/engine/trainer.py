@@ -227,6 +227,25 @@ DEFAULT_TRAINING_STOCKS: List[str] = [
     '101490',  # 에스앤에스텍       반도체부품
 ]
 
+
+def _get_dynamic_training_stocks() -> List[str]:
+    """KOSPI200 + KOSDAQ150 구성 종목 동적 수집 (pykrx).
+    실패 시 DEFAULT_TRAINING_STOCKS 폴백.
+    """
+    try:
+        from pykrx import stock as pykrx_stock
+        today = datetime.now().strftime('%Y%m%d')
+        k200  = list(pykrx_stock.get_index_portfolio_deposit_file('1028', date=today))
+        kq150 = list(pykrx_stock.get_index_portfolio_deposit_file('2203', date=today))
+        combined = list(dict.fromkeys(k200 + kq150))  # 순서 유지 dedup
+        if len(combined) >= 100:
+            logger.info(f"[학습 종목] KOSPI200({len(k200)}) + KOSDAQ150({len(kq150)}) "
+                        f"= {len(combined)}개 (중복 제거)")
+            return combined
+    except Exception as e:
+        logger.warning(f"[학습 종목] 동적 조회 실패: {e} — DEFAULT_TRAINING_STOCKS 사용")
+    return DEFAULT_TRAINING_STOCKS
+
 # ───────────────────────────── 모델 설정 ─────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -273,13 +292,11 @@ BASE_FEATURE_COLS = [
     'adx_di_diff',          # DI+ - DI- (추세 방향성 — ADX 보완)
     'bb_width',             # 볼린저 밴드 폭 (변동성 압축 감지)
     # ── 중기 모멘텀 / 상대강도 ────────────────────────────────
-    'rs_vs_mkt_3m',         # KOSPI 대비 3개월 초과수익
-    'rs_vs_mkt_1m',         # KOSPI 대비 1개월 초과수익
+    'rs_vs_mkt_3m',         # KOSPI 대비 3개월 초과수익 (rs_vs_mkt_1m 포함)
     'high_52w_ratio',       # 52주 고가 대비 현재가 (추세 위치)
     'mom_accel',            # 모멘텀 가속도 (1m - 3m/3)
     # ── 추세 / 가격 모멘텀 ────────────────────────────────────
     'macd_diff',            # MACD 다이버전스 (추세 전환)
-    'macd_diff_change',     # MACD 다이버전스 변화율
     'macd_slope_5d',        # MACD 다이버전스 5일 기울기 (모멘텀 가속)
     'price_sma_5_ratio',    # 단기 추세 (가격/SMA5)
     # ── 반전/패턴 신호 ────────────────────────────────────────
@@ -288,19 +305,12 @@ BASE_FEATURE_COLS = [
     # ── 거래량 방향성 ─────────────────────────────────────────
     'cmf',                  # Chaikin Money Flow (매수/매도 압력)
     'vzo',                  # Volume Zone Oscillator
-    'obv_change',           # OBV 변화율
     'vol_ratio',            # 거래량 / 20일 평균 비율
-    'vol_change',           # 거래량 전일 대비 변화율
-    'rsi_mfi_div',          # RSI-MFI 다이버전스 (가격강도 vs 거래량강도)
-    # ── 스퀴즈 모멘텀 ─────────────────────────────────────────
-    'sqzmi',                # Squeeze Momentum (BB 내 MACD 압축 돌파)
-    # ── 캔들 / 단기 신호 ──────────────────────────────────────
-    'candle_body',          # 캔들 실체 (상승/하락 강도)
     # ── 거시경제 ──────────────────────────────────────────────
     'vix_level',            # VIX 공포지수
     'vix_change_5d',        # VIX 5일 변화율
     'sp500_1m',             # S&P500 1개월 수익률
-]  # 25개 피처
+]  # 18개 피처 (제거: sqzmi, vol_change, macd_diff_change, obv_change, rsi_mfi_div, candle_body, rs_vs_mkt_1m)
 
 PYKRX_FEATURE_COLS = [
     'pbr', 'per', 'div', 'pbr_xs', 'per_xs',
@@ -639,9 +649,22 @@ def fetch_train_test_samples(
     split_idx  = int(n_dates * (1.0 - test_ratio))
     split_date = all_dates[split_idx]
 
+    # ── Purging: 학습/테스트 경계 ─────────────────────────────────────────────
+    # split_date 직전 future_days 거래일의 샘플은 학습에서 제거.
+    # 해당 샘플의 타깃(10거래일 후 수익률)이 테스트 기간 가격으로 계산됐기 때문에
+    # 모델이 테스트 기간 정보를 간접적으로 학습하는 label leakage가 발생한다.
+    purge_idx  = max(0, split_idx - future_days)
+    purge_date = all_dates[purge_idx]
+
     keep_cols = [c for c in FEATURE_COLS if c in df_all.columns] + ['target']
-    df_train  = df_all[df_all.index <  split_date][keep_cols].dropna()
+    df_train  = df_all[df_all.index <  purge_date][keep_cols].dropna()
     df_test   = df_all[df_all.index >= split_date][keep_cols].dropna()
+
+    purged_n = len(df_all[(df_all.index >= purge_date) & (df_all.index < split_date)])
+    logger.info(
+        f"[Purging] 학습/테스트 경계 제거: {purge_date.date()} ~ {split_date.date()} "
+        f"({future_days}거래일 gap) → {purged_n}샘플 제거"
+    )
 
     pos_rate = df_train['target'].mean()
     logger.info(
@@ -655,12 +678,14 @@ def fetch_train_test_samples(
     return df_train, df_test
 
 
-def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
+def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
+                   future_days: int = 10) -> None:
     """모델 학습(이진 분류) → 평가 → 모델/스케일러/파라미터 저장.
 
     타깃: 10거래일 후 수익률 상위 25% = 1 / 하위 25% = 0 (중간 50% 제외, 이진 분류)
     지표: AUC-ROC (랜덤 기준선 0.5, 목표 ≥ 0.52)
-    교차검증: 5-fold TimeSeriesSplit (날짜 기준 분할, cross-sectional 무결성 보장)
+    교차검증: 5-fold TimeSeriesSplit (날짜 기준 분할, Purging으로 label leakage 방지)
+    Purging:  각 CV fold의 val 시작 전 future_days 거래일을 학습 fold에서 제거.
     """
     os.makedirs(MODEL_DIR,  exist_ok=True)
     os.makedirs(PARAMS_DIR, exist_ok=True)
@@ -680,8 +705,9 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
     logger.info(f"\n기준선 AUC: 0.5000  (랜덤 분류기)")
     logger.info(f"학습 샘플: {len(X_train)}, 검증 샘플: {len(X_test)}, 양성 비율: {pos_rate:.1%}\n")
 
-    # 날짜 목록 (TimeSeriesSplit 기준)
+    # 날짜 목록 (TimeSeriesSplit 기준) + CV purging용 O(1) 위치 인덱스
     unique_dates = sorted(df_train.index.unique())
+    date_to_pos  = {d: i for i, d in enumerate(unique_dates)}
 
     results = []
     for name, cfg in MODEL_CONFIGS.items():
@@ -689,14 +715,22 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
         logger.info(f"  학습 중: {name}")
         t0 = time.time()
 
-        # ── H: 5-fold TimeSeriesSplit 교차검증 (날짜 기준 분할) ──────────────
-        tscv     = TimeSeriesSplit(n_splits=5)
-        cv_aucs  = []
+        # ── H: 5-fold TimeSeriesSplit 교차검증 (Purging 적용) ────────────────
+        # Purging: val fold 시작 전 future_days 거래일을 학습 fold에서 제거.
+        # 그 기간 샘플의 타깃이 val 기간 가격으로 계산되므로 label leakage 발생.
+        tscv    = TimeSeriesSplit(n_splits=5)
+        cv_aucs = []
         for tr_d_idx, val_d_idx in tscv.split(unique_dates):
-            tr_dates  = {unique_dates[i] for i in tr_d_idx}
-            val_dates = {unique_dates[i] for i in val_d_idx}
-            tr_mask   = df_train.index.isin(tr_dates)
-            val_mask  = df_train.index.isin(val_dates)
+            tr_dates  = [unique_dates[i] for i in tr_d_idx]
+            val_dates = [unique_dates[i] for i in val_d_idx]
+
+            # val 시작 위치보다 future_days 앞까지만 학습에 포함 (purge boundary)
+            val_start_pos   = date_to_pos[val_dates[0]]
+            purge_boundary  = val_start_pos - future_days
+            purged_tr_dates = {d for d in tr_dates if date_to_pos[d] < purge_boundary}
+
+            tr_mask  = df_train.index.isin(purged_tr_dates)
+            val_mask = df_train.index.isin(set(val_dates))
             if tr_mask.sum() < 10 or val_mask.sum() < 10:
                 continue
             cv_sc = StandardScaler()
@@ -706,7 +740,7 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
             cv_aucs.append(roc_auc_score(y_train[val_mask], cv_p))
         cv_mean = float(np.mean(cv_aucs)) if cv_aucs else float('nan')
         cv_std  = float(np.std(cv_aucs))  if cv_aucs else float('nan')
-        logger.info(f"  CV AUC (5-fold TS): {cv_mean:.4f} ± {cv_std:.4f}")
+        logger.info(f"  CV AUC (5-fold TS, purged): {cv_mean:.4f} ± {cv_std:.4f}")
 
         # ── 최종 모델 학습 (전체 학습 세트 사용) ─────────────────────────────
         scaler = StandardScaler()
@@ -774,6 +808,7 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame) -> None:
             "positive_rate":       round(float(pos_rate), 4),
             "cv_auc_mean":         round(cv_mean, 4) if not np.isnan(cv_mean) else None,
             "cv_auc_std":          round(cv_std,  4) if not np.isnan(cv_std)  else None,
+            "purging_days":        future_days,
             "train_auc":           round(train_auc,   4),
             "test_auc":            round(test_auc,    4),
             "test_logloss":        round(test_logloss, 4),
@@ -818,11 +853,11 @@ def run_training(
     Args:
         period:      학습 데이터 기간 (예: '2y', '1y')
         future_days: 예측 대상 거래일 수 (기본값 10 = 2주, 중기 노이즈 최소화)
-        stocks:      학습 종목 코드 리스트 (None이면 DEFAULT_TRAINING_STOCKS 사용)
+        stocks:      학습 종목 코드 리스트 (None이면 KOSPI200+KOSDAQ150 동적 수집, 실패 시 DEFAULT_TRAINING_STOCKS 폴백)
         test_ratio:  검증 세트 비율 (0~1)
     """
     if stocks is None:
-        stocks = DEFAULT_TRAINING_STOCKS
+        stocks = _get_dynamic_training_stocks()
 
     logging.basicConfig(
         level=logging.INFO,
@@ -845,4 +880,4 @@ def run_training(
     )
 
     logger.info("\n[2/2] 모델 학습 및 저장 중...")
-    train_and_save(df_train, df_test)
+    train_and_save(df_train, df_test, future_days=future_days)

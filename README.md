@@ -85,10 +85,11 @@ KoreanStocks/
 │       │       ├── analysis.py          # GET/POST /api/analysis/{code}
 │       │       ├── watchlist.py         # CRUD /api/watchlist
 │       │       ├── backtest.py          # GET /api/backtest
-│       │       └── market.py            # GET /api/market
+│       │       ├── market.py            # GET /api/market
+│       │       └── models.py            # GET /api/model_health
 │       ├── static/
 │       │   ├── index.html               # Reveal.js 일일 브리핑 슬라이드
-│       │   ├── dashboard.html           # 인터랙티브 대시보드 (5탭)
+│       │   ├── dashboard.html           # 인터랙티브 대시보드 (6탭)
 │       │   ├── js/
 │       │   │   ├── slides.js            # 슬라이드 동적 생성
 │       │   │   └── dashboard.js         # 대시보드 인터랙션
@@ -102,7 +103,7 @@ KoreanStocks/
 │           ├── engine/
 │           │   ├── indicators.py        # 기술적 지표 계산 (RSI, MACD, BB, SMA, OBV)
 │           │   ├── strategy.py          # 전략별 시그널 생성 (TechnicalStrategy)
-│           │   ├── prediction_model.py  # ML 앙상블 예측 (RF, GBR, XGB)
+│           │   ├── prediction_model.py  # ML 앙상블 예측 (RF + GB + XGB 이진 분류)
 │           │   ├── news_agent.py        # 뉴스 수집 + 감성 분석 (GPT-4o-mini)
 │           │   ├── analysis_agent.py    # 종목 심층 분석 오케스트레이터
 │           │   ├── recommendation_agent.py  # 유망 종목 선정 + 추천 생성
@@ -144,14 +145,14 @@ KRX 전체 상장 종목
 
 2단계  ML 앙상블 예측              → ml_score (0–100)
        Random Forest + Gradient Boosting + XGBoost (AUC 기반 가중 앙상블)
-       25개 피처 (PyKrx 제외, 순수 기술지표 + 거시경제):
+       18개 피처 (PyKrx 제외, 순수 기술지표 + 거시경제):
          · 변동성·추세강도 (4): ATR 비율, ADX, ADX DI방향(DI+−DI−), BB 너비
-         · 시장 상대강도 (2): 1m·3m 초과수익 (vs KS11/KQ11)
-         · 모멘텀 팩터 (4): 52주 고점 비율, 모멘텀 가속도, MACD diff, MACD diff 변화율
+         · 시장 상대강도 (1): 3개월 초과수익 (vs KS11/KQ11)
+         · 모멘텀 팩터 (3): 52주 고점 비율, 모멘텀 가속도, MACD diff
          · 추세 기울기 (2): MACD diff 5일 기울기, 가격/SMA5 비율
          · finta 지표 (4): Fisher Transform, Williams Fractal, CMF, VZO
-         · 거래량·강도 (5): OBV 변화율, 거래량 비율, 거래량 변화율, RSI−MFI 발산, SQZMI
-         · 캔들·거시 (4): 캔들 바디 비율, VIX 레벨, VIX 5일 변화율, S&P500 1개월 수익률
+         · 거래량·강도 (1): 거래량 비율 (20일 평균 대비)
+         · 거시경제 (3): VIX 레벨, VIX 5일 변화율, S&P500 1개월 수익률
        타깃: 10거래일 후 수익률 상위 25% = 1 / 하위 25% = 0 (중간 50% 제외, neutral zone)
        모델 없을 경우 tech_score 폴백
        예측 의미: 이진 분류 확률 → test_proba 101분위수 캘리브레이션 → 0~100 균등 스케일
@@ -600,7 +601,7 @@ koreanstocks serve
 
 브라우저가 자동으로 열리며 `http://localhost:8000/dashboard` 접속
 - `/` — Reveal.js 일일 브리핑 슬라이드
-- `/dashboard` — 인터랙티브 대시보드 (5탭)
+- `/dashboard` — 인터랙티브 대시보드 (6탭)
 - `/docs` — FastAPI Swagger UI
 
 > **권장 브라우저: Chrome / Firefox (최신 버전)**
@@ -655,6 +656,7 @@ NAVER_CLIENT_SECRET
 | **AI 추천** | `/dashboard#recommendations` | 테마·시장별 추천 생성, 날짜 선택 히스토리, 추천 지속성 히트맵, 📊 추천 성과 추적 (5·10·20거래일 승률·목표가 달성률) |
 | **백테스트** | `/dashboard#backtest` | RSI/MACD/COMPOSITE 전략 시뮬레이션, B&H 비교 차트, 초보자 해석 가이드 |
 | **설정** | `/dashboard#settings` | 수동 자동화 실행, 텔레그램 설정 상태 확인 |
+| **모델 신뢰도** | `/dashboard#model` | ML 모델 AUC·과적합 갭·드리프트 등급·피처 중요도·재학습 권장 여부 확인 |
 | **브리핑** | `/` | Reveal.js 일일 슬라이드 (종목별 점수·뉴스·AI 의견) |
 | **API 문서** | `/docs` | FastAPI Swagger UI |
 

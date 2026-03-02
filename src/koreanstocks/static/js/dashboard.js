@@ -85,6 +85,8 @@ function syncThemeBtn() {
 }
 
 // ── 탭 전환 ─────────────────────────────────────────────────────
+let modelHealthLoaded = false;
+
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -92,6 +94,11 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     const panel = document.getElementById(`tab-${btn.dataset.tab}`);
     if (panel) panel.classList.add("active");
+
+    if (btn.dataset.tab === "model" && !modelHealthLoaded) {
+      loadModelHealth();
+      modelHealthLoaded = true;
+    }
   });
 });
 
@@ -1144,6 +1151,302 @@ async function loadTelegramStatus() {
   } catch (e) {
     el.innerHTML = `<span style="color:var(--sell)">서버 연결 실패: ${e.message}</span>`;
   }
+}
+
+// ═══════════════════════════════════════════════════════
+// Tab 6 — 모델 신뢰도
+// ═══════════════════════════════════════════════════════
+
+function aucColor(v) {
+  return v >= 0.57 ? "var(--buy)" : v >= 0.54 ? "var(--hold)" : "var(--sell)";
+}
+function gapColor(v) {
+  return v < 0.07 ? "var(--buy)" : v < 0.10 ? "var(--hold)" : "var(--sell)";
+}
+function driftColor(level) {
+  return level === "LOW" ? "var(--buy)" : level === "MEDIUM" ? "var(--hold)" : "var(--sell)";
+}
+
+async function loadModelHealth() {
+  const wrap = document.getElementById("model-health-wrap");
+  wrap.innerHTML = `<span style="color:var(--muted)">모델 정보 로드 중…</span>`;
+  try {
+    const data = await api("/api/model_health");
+    wrap.innerHTML = "";
+    wrap.appendChild(renderEnsembleSummary(data.ensemble));
+    wrap.appendChild(renderModelCards(data.models));
+    wrap.appendChild(renderFeatureSection(data.models));
+    wrap.appendChild(renderComponentReliability(data.ensemble, data.scoring_formula));
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:var(--sell)">모델 정보를 불러올 수 없습니다: ${e.message}</p>`;
+  }
+}
+
+function renderEnsembleSummary(ens) {
+  const driftC  = driftColor(ens.drift_level);
+  const driftLabel = ens.drift_level === "LOW" ? "양호" : ens.drift_level === "MEDIUM" ? "주의" : "위험";
+  const daysText = ens.days_since_training >= 0
+    ? `${ens.days_since_training}일 전`
+    : "알 수 없음";
+  const passIcon = ens.all_quality_pass ? "✅" : "❌";
+
+  const factorsHtml = ens.drift_factors.length
+    ? `<ul style="margin:8px 0 0;padding-left:18px;font-size:.84em;color:var(--sell)">
+        ${ens.drift_factors.map(f => `<li>${f}</li>`).join("")}
+       </ul>`
+    : `<div style="font-size:.84em;color:var(--buy);margin-top:6px">위험 요인 없음</div>`;
+
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="flex-row" style="margin-bottom:12px">
+      <div class="card-title" style="margin:0">🧠 앙상블 모델 상태</div>
+      <div style="margin-left:auto;padding:4px 12px;border-radius:12px;font-weight:700;font-size:.9em;
+                  background:${driftC}22;color:${driftC};border:1px solid ${driftC}55">
+        ${ens.drift_level} · ${driftLabel}
+      </div>
+    </div>
+    <div class="result-grid">
+      <div class="result-card">
+        <div class="rc-label">활성 모델 수</div>
+        <div class="rc-val">${ens.active_count} / 3</div>
+        <div class="rc-delta" style="color:var(--muted)">RF + GB + XGB</div>
+      </div>
+      <div class="result-card">
+        <div class="rc-label">평균 Test AUC</div>
+        <div class="rc-val" style="color:${aucColor(ens.mean_test_auc)}">${ens.mean_test_auc.toFixed(4)}</div>
+        <div class="rc-delta" style="color:var(--muted)">기준 ${ens.min_auc_threshold} 이상</div>
+      </div>
+      <div class="result-card">
+        <div class="rc-label">평균 과적합 갭</div>
+        <div class="rc-val" style="color:${gapColor(ens.mean_overfit_gap)}">${ens.mean_overfit_gap.toFixed(4)}</div>
+        <div class="rc-delta" style="color:var(--muted)">train_auc − test_auc</div>
+      </div>
+      <div class="result-card">
+        <div class="rc-label">마지막 학습</div>
+        <div class="rc-val">${daysText}</div>
+        <div class="rc-delta" style="color:${ens.retrain_recommended ? "var(--sell)" : "var(--muted)"}">
+          ${ens.retrain_recommended ? "⚠️ 재학습 권장" : "정상"}
+        </div>
+      </div>
+      <div class="result-card">
+        <div class="rc-label">품질 기준 통과</div>
+        <div class="rc-val">${passIcon} ${ens.all_quality_pass ? "전체 통과" : "미달 존재"}</div>
+        <div class="rc-delta" style="color:var(--muted)">AUC > ${ens.min_auc_threshold}</div>
+      </div>
+      <div class="result-card">
+        <div class="rc-label">레짐 갭 (평균)</div>
+        <div class="rc-val" style="color:${gapColor(ens.mean_regime_gap)}">${ens.mean_regime_gap.toFixed(4)}</div>
+        <div class="rc-delta" style="color:var(--muted)">test_auc − cv_auc</div>
+      </div>
+    </div>
+    ${ens.drift_factors.length ? `<div style="margin-top:12px">
+      <div style="font-size:.88em;font-weight:600;color:var(--sell)">주의 요인</div>
+      ${factorsHtml}
+    </div>` : ""}`;
+  return card;
+}
+
+function renderModelCards(models) {
+  const wrap = document.createElement("div");
+  wrap.className = "card";
+  wrap.innerHTML = `<div class="card-title">📊 개별 모델 상세</div>`;
+
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px";
+
+  models.forEach(m => {
+    const passIcon = m.quality_pass ? "✅ 통과" : "❌ 미달";
+    const passColor = m.quality_pass ? "var(--buy)" : "var(--sell)";
+    const aucPct  = Math.min(100, Math.max(0, ((m.test_auc - 0.5) / 0.15) * 100));
+    const gapPct  = Math.min(100, (m.overfit_gap / 0.15) * 100);
+
+    const savedDate = m.saved_at ? m.saved_at.slice(0, 10) : "—";
+
+    const card = document.createElement("div");
+    card.style.cssText = "background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px";
+    card.innerHTML = `
+      <div class="flex-row" style="margin-bottom:10px">
+        <div style="font-weight:700;font-size:.95em">${m.label}</div>
+        <div style="margin-left:auto;font-size:.78em;color:${passColor}">${passIcon}</div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:.8em;color:var(--muted);margin-bottom:3px">
+          Test AUC <span style="float:right;font-weight:700;color:${aucColor(m.test_auc)}">${m.test_auc.toFixed(4)}</span>
+        </div>
+        <div style="background:var(--bg-dark);border-radius:4px;height:8px;overflow:hidden">
+          <div style="width:${aucPct.toFixed(1)}%;height:100%;background:${aucColor(m.test_auc)};border-radius:4px;transition:width .4s"></div>
+        </div>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">CV AUC</span>
+        <span class="kv-val">${m.cv_auc_mean.toFixed(4)} ± ${m.cv_auc_std.toFixed(4)}</span>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">Train AUC</span>
+        <span class="kv-val" style="color:var(--muted)">${m.train_auc.toFixed(4)}</span>
+      </div>
+      <div style="margin:8px 0">
+        <div style="font-size:.8em;color:var(--muted);margin-bottom:3px">
+          과적합 갭 <span style="float:right;font-weight:700;color:${gapColor(m.overfit_gap)}">${m.overfit_gap.toFixed(4)}</span>
+        </div>
+        <div style="background:var(--bg-dark);border-radius:4px;height:6px;overflow:hidden">
+          <div style="width:${gapPct.toFixed(1)}%;height:100%;background:${gapColor(m.overfit_gap)};border-radius:4px;transition:width .4s"></div>
+        </div>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">Log Loss</span>
+        <span class="kv-val">${m.test_logloss.toFixed(4)}</span>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">학습 샘플</span>
+        <span class="kv-val">${m.training_samples.toLocaleString()}</span>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">Purging</span>
+        <span class="kv-val">${m.purging_days}거래일</span>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">학습 시간</span>
+        <span class="kv-val">${m.training_duration.toFixed(1)}s</span>
+      </div>
+      <div class="kv-row" style="font-size:.82em">
+        <span class="kv-key">저장일</span>
+        <span class="kv-val" style="color:var(--muted)">${savedDate} (${m.days_since_training}일 전)</span>
+      </div>`;
+    grid.appendChild(card);
+  });
+
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+let _activeFeatureModel = "gradient_boosting";
+
+function renderFeatureSection(models) {
+  const wrap = document.createElement("div");
+  wrap.className = "card";
+  wrap.innerHTML = `<div class="card-title">🔍 피처 중요도</div>`;
+
+  // 모델 전환 탭
+  const tabRow = document.createElement("div");
+  tabRow.className = "theme-filter";
+  tabRow.style.marginBottom = "14px";
+
+  models.forEach(m => {
+    const btn = document.createElement("button");
+    btn.className = "theme-btn" + (m.name === _activeFeatureModel ? " active" : "");
+    btn.textContent = m.label;
+    btn.addEventListener("click", () => {
+      tabRow.querySelectorAll(".theme-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      _activeFeatureModel = m.name;
+      renderFeatureChart(chartArea, m);
+    });
+    tabRow.appendChild(btn);
+  });
+  wrap.appendChild(tabRow);
+
+  const chartArea = document.createElement("div");
+  wrap.appendChild(chartArea);
+
+  const activeModel = models.find(m => m.name === _activeFeatureModel) || models[0];
+  if (activeModel) renderFeatureChart(chartArea, activeModel);
+
+  return wrap;
+}
+
+function renderFeatureChart(container, model) {
+  const features = model.feature_importances || [];
+  if (!features.length) {
+    container.innerHTML = `<span style="color:var(--muted)">피처 중요도 데이터 없음</span>`;
+    return;
+  }
+  const maxImp = features[0][1];
+
+  container.innerHTML = features.map(([name, imp], idx) => {
+    const pct  = maxImp > 0 ? ((imp / maxImp) * 100).toFixed(1) : 0;
+    const isTop = idx < 3;
+    const barColor = isTop ? "var(--accent)" : "var(--chart-accent)";
+    return `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="width:140px;font-size:.8em;color:${isTop ? "var(--text)" : "var(--muted)"};
+                    text-align:right;flex-shrink:0;font-weight:${isTop ? 600 : 400}">${name}</div>
+        <div style="flex:1;background:var(--bg-dark);border-radius:4px;height:14px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${barColor};border-radius:4px;
+                      transition:width .4s;opacity:${isTop ? 1 : 0.65}"></div>
+        </div>
+        <div style="width:52px;font-size:.78em;color:var(--muted);text-align:right">
+          ${(imp * 100).toFixed(2)}%
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function renderComponentReliability(ens, formula) {
+  const wrap = document.createElement("div");
+  wrap.className = "card";
+  wrap.innerHTML = `<div class="card-title">📋 분석 구성요소 신뢰도</div>`;
+
+  const mlActive = ens.active_count > 0;
+  const aucVal   = ens.mean_test_auc;
+  const aucStars = aucVal >= 0.57 ? "★★★★☆" : aucVal >= 0.54 ? "★★★☆☆" : "★★☆☆☆";
+
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px";
+  grid.innerHTML = `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:700;margin-bottom:8px">📈 기술적 점수</div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">방식</span><span class="kv-val">RSI · MACD · BB · ADX 등 13개 지표</span></div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">범위</span><span class="kv-val">0 ~ 100</span></div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">가중치</span><span class="kv-val">${mlActive ? "40%" : "65%"} (ML ${mlActive ? "활성" : "비활성"})</span></div>
+      <div style="margin-top:8px;font-size:.8em;color:var(--muted)">
+        주의: 과거 패턴 기반. 추세 변환 초기 신호 포착이 강점.
+      </div>
+      <div style="margin-top:6px;color:#f59e0b;font-size:.9em">★★★★☆</div>
+    </div>
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:700;margin-bottom:8px">🤖 ML 예측</div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">방식</span><span class="kv-val">RF + GB + XGB 앙상블 (이진 분류)</span></div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">AUC</span>
+        <span class="kv-val" style="color:${aucColor(aucVal)}">${aucVal.toFixed(4)}</span>
+      </div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">가중치</span><span class="kv-val">${mlActive ? "35%" : "미사용"}</span></div>
+      <div style="margin-top:8px;font-size:.8em;color:var(--muted)">
+        주의: AUC ~0.58은 무작위 대비 소폭 우위. 과신 금지.
+      </div>
+      <div style="margin-top:6px;color:#f59e0b;font-size:.9em">${aucStars}</div>
+    </div>
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:700;margin-bottom:8px">📰 뉴스 감성</div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">방식</span><span class="kv-val">Naver News + GPT-4o-mini</span></div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">범위</span><span class="kv-val">-100 ~ +100 (정규화 후 0~100)</span></div>
+      <div class="kv-row" style="font-size:.82em"><span class="kv-key">가중치</span><span class="kv-val">25%</span></div>
+      <div style="margin-top:8px;font-size:.8em;color:var(--muted)">
+        주의: 뉴스 편향 가능. 긍정 편향 수정 적용됨 (v0.3.2).
+      </div>
+      <div style="margin-top:6px;color:#f59e0b;font-size:.9em">★★★☆☆</div>
+    </div>`;
+  wrap.appendChild(grid);
+
+  // 종합 점수 공식
+  const formulaDiv = document.createElement("div");
+  formulaDiv.style.cssText = "background:var(--bg-dark);border-radius:8px;padding:14px 16px;font-size:.88em";
+  formulaDiv.innerHTML = `
+    <div style="font-weight:700;margin-bottom:8px">종합 점수 산출 공식</div>
+    <div style="margin-bottom:6px">
+      <span style="color:var(--muted)">ML 모델 활성 시:</span>
+      <code style="margin-left:8px;color:var(--accent)">${formula.with_ml}</code>
+    </div>
+    <div>
+      <span style="color:var(--muted)">ML 모델 없을 시:</span>
+      <code style="margin-left:8px;color:var(--hold)">${formula.without_ml}</code>
+    </div>
+    <div style="margin-top:8px;font-size:.8em;color:var(--muted)">
+      ※ sentiment_norm = (sentiment_score + 100) / 2  →  0~100 정규화
+    </div>`;
+  wrap.appendChild(formulaDiv);
+  return wrap;
 }
 
 // ═══════════════════════════════════════════════════════
