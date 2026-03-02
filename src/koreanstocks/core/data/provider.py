@@ -1,13 +1,28 @@
 import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 import logging
 import time
+from functools import lru_cache
 from typing import List, Dict, Optional
 from koreanstocks.core.config import config
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_xkrx_calendar():
+    """XKRX 거래 캘린더 (프로세스당 1회만 생성)."""
+    import exchange_calendars as xcals
+    return xcals.get_calendar("XKRX", start="2020-01-01", end="2029-12-31")
+
+
+@lru_cache(maxsize=10)
+def _get_kr_holidays(year: int):
+    """holidays.KR 연도별 캐시 (선거일·임시공휴일 보완)."""
+    import holidays
+    return holidays.country_holidays('KR', years=year)
 
 class StockDataProvider:
     """한국 시장 주식 데이터 수집을 담당하는 클래스"""
@@ -292,24 +307,53 @@ class StockDataProvider:
                 logger.error(f"Market ranking DB 폴백 실패: {e3}")
             return []
 
-    def is_trading_day(self) -> bool:
-        """오늘이 한국 증시 거래일인지 여부 반환.
+    def is_trading_day(self, d: Optional[date_type] = None) -> bool:
+        """한국 증시 거래일인지 여부 반환.
 
-        get_market_ticker_list() 사용: 비거래일엔 빈 리스트 반환,
-        거래일엔 KOSPI 종목 코드 목록(수백 개) 반환.
-        get_market_ohlcv()는 비거래일에 이전 거래일 데이터를 반환하는 경우가 있어 사용 안 함.
+        d: 확인할 날짜 (None이면 오늘). 미래·과거 날짜도 지원.
+
+        판별 순서:
+          1단계 (즉시)  — 토·일 → False
+          2단계 (오프라인) — exchange_calendars XKRX: 공휴일·대체공휴일·KRX 전용 휴장
+          3단계 (오프라인) — holidays.KR 보완: exchange_calendars가 놓친 선거일 등
+          4단계 (온라인)  — pykrx 실측 확인 (d=오늘이고 네트워크 가용 시만)
         """
-        now = datetime.now()
-        if now.weekday() >= 5:  # 토(5)·일(6) → pykrx 호출 없이 바로 비거래일 반환
+        target = d or datetime.now().date()
+
+        # 1단계: 주말 즉시 판별
+        if target.weekday() >= 5:
             return False
+
+        # 2단계: exchange_calendars XKRX (오프라인)
+        xkrx_is_trading: Optional[bool] = None
         try:
-            from pykrx import stock as _pykrx
-            today = now.strftime('%Y%m%d')
-            tickers = _pykrx.get_market_ticker_list(today, market='KOSPI')
-            return len(tickers) > 0
+            cal = _get_xkrx_calendar()
+            xkrx_is_trading = cal.is_session(pd.Timestamp(target))
+            if not xkrx_is_trading:
+                return False
         except Exception as e:
-            logger.warning(f"거래일 확인 실패: {e} → 거래일로 간주")
-            return True  # 판단 불가 시 거래일로 간주 (오탐 방지)
+            logger.debug(f"exchange_calendars 체크 실패: {e}")
+
+        # 3단계: holidays.KR 보완 (선거일·임시공휴일 등 exchange_calendars 누락분)
+        try:
+            kr_h = _get_kr_holidays(target.year)
+            if target in kr_h:
+                return False
+        except Exception as e:
+            logger.debug(f"holidays.KR 체크 실패: {e}")
+
+        # 4단계: pykrx 온라인 실측 — d=오늘인 경우만 (미래 날짜는 KRX 데이터 없음)
+        today = datetime.now().date()
+        if target == today:
+            try:
+                from pykrx import stock as _pykrx
+                tickers = _pykrx.get_market_ticker_list(today.strftime('%Y%m%d'), market='KOSPI')
+                return len(tickers) > 0
+            except Exception as e:
+                logger.warning(f"pykrx 거래일 확인 실패: {e} → 오프라인 판단 사용")
+
+        # 오프라인 체크 통과 (pykrx 실패 or 미래/과거 날짜) → 거래일로 판단
+        return True
 
     def get_stocks_by_theme(self, keywords: List[str], market: str = 'ALL') -> pd.DataFrame:
         """업종/산업 분야에서 키워드를 검색하여 관련 종목 리스트 반환"""

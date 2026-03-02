@@ -52,6 +52,8 @@ dependencies = [
     "schedule>=1.2,<2",
     "matplotlib>=3.8",
     "httpx>=0.24,<1",
+    "exchange-calendars>=4.13",
+    "holidays>=0.58",
 ]
 
 [project.optional-dependencies]
