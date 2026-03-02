@@ -19,7 +19,7 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 def create_app() -> FastAPI:
     app = FastAPI(
         title="KoreanStocks API",
-        version="0.3.5",
+        version="0.3.4",
         description="KOSPI·KOSDAQ 종목 자동 스크리닝 + 텔레그램 리포트 플랫폼",
     )
 
