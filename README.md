@@ -70,62 +70,32 @@ DB          SQLite
 
 ## 🏗 시스템 아키텍처
 
-```mermaid
-graph TD
-    subgraph CLI["🖥 CLI (koreanstocks)"]
-        serve["serve"]
-        recommend["recommend"]
-        analyze["analyze"]
-        train["train"]
-        outcomes["outcomes"]
-        sync["sync"]
-        init_cmd["init / home"]
-    end
-
-    subgraph CORE["🧠 Core Engine (koreanstocks.core)"]
-        indicators["indicators.py\n기술적 지표"]
-        prediction["prediction_model.py\nML 앙상블"]
-        news["news_agent.py\n뉴스 감성"]
-        analysis["analysis_agent.py\n심층 분석"]
-        rec_agent["recommendation_agent.py\n종목 추천"]
-        scheduler["scheduler.py\n자동화"]
-        trainer["trainer.py\nML 재학습"]
-        backtester["backtester.py\n백테스팅"]
-        notifier["notifier.py\n텔레그램"]
-        outcome_tracker["outcome_tracker.py\n성과 추적"]
-    end
-
-    subgraph DATA["📊 Data Layer"]
-        provider["provider.py\nFinanceDataReader\nKIND API"]
-        database["database.py\nSQLite CRUD"]
-    end
-
-    subgraph API["⚡ FastAPI (koreanstocks.api)"]
-        routers["routers/\nrecommendations · analysis\nwatchlist · backtest\nmarket · models"]
-    end
-
-    subgraph STATIC["🌐 Frontend"]
-        dashboard["dashboard.html\n인터랙티브 대시보드 (6탭)"]
-        slides["index.html\nReveal.js 브리핑"]
-    end
-
-    subgraph STORAGE["💾 저장소"]
-        db[("SQLite DB\nstock_analysis.db")]
-        models_dir["models/saved/\n*.pkl"]
-    end
-
-    CLI --> CORE
-    CLI --> API
-    API --> CORE
-    API --> STATIC
-    CORE --> DATA
-    DATA --> db
-    CORE --> db
-    trainer --> models_dir
-    prediction --> models_dir
 ```
-
-### 디렉토리 구조
+🖥  CLI (koreanstocks)
+      serve · recommend · analyze · train · outcomes · sync · init · home
+        ↕ 명령 위임                              ↕ 서버 기동
+🧠  Core Engine (koreanstocks.core)       ⚡  FastAPI API (koreanstocks.api)
+  ├─ engine/                                routers/
+  │   indicators.py      기술적 지표           recommendations · analysis
+  │   prediction_model.py ML 앙상블           watchlist · backtest
+  │   news_agent.py      뉴스 감성            market · models
+  │   analysis_agent.py  심층 분석
+  │   recommendation_agent.py 종목 추천           ↓ JSON 응답
+  │   trainer.py         ML 재학습        🌐  Frontend
+  │   scheduler.py       자동화              dashboard.html (대시보드 6탭)
+  └─ utils/                                index.html  (Reveal.js 브리핑)
+      backtester.py      백테스팅
+      notifier.py        텔레그램
+      outcome_tracker.py 성과 추적
+        ↕ 데이터 수집 / DB R&W
+📊  Data Layer
+      provider.py   FinanceDataReader + KIND API (전체 종목, OHLCV)
+      database.py   SQLite CRUD
+        ↕ 영속 저장
+💾  저장소
+      data/storage/stock_analysis.db   SQLite DB
+      models/saved/*.pkl               학습된 ML 모델
+```
 
 ```
 KoreanStocks/
@@ -189,29 +159,29 @@ KoreanStocks/
 
 ```mermaid
 flowchart TD
-    A[FinanceDataReader\nKIND API\n전체 종목 수집] --> B[시장 필터\nKOSPI / KOSDAQ / ALL]
-    B --> V[거래량 상위\n40% 버킷]
-    B --> M[상승 모멘텀\n+2%~+15%\n35% 버킷]
-    B --> R[반등 후보\n거래량 상위 중 하락\n25% 버킷]
+    A["FinanceDataReader<br/>KIND API<br/>전체 종목 수집"] --> B["시장 필터<br/>KOSPI / KOSDAQ / ALL"]
+    B --> V["거래량 상위<br/>40% 버킷"]
+    B --> M["상승 모멘텀<br/>+2%~+15%<br/>35% 버킷"]
+    B --> R["반등 후보<br/>거래량 상위 중 하락<br/>25% 버킷"]
 
-    V & M & R --> POOL["분석 풀 구성\nmin(limit × 8, 80)개\nlimit=9 → 72종목"]
+    V & M & R --> POOL["분석 풀 구성<br/>min(limit × 8, 80)개<br/>limit=9 → 72종목"]
 ```
 
 ### 종목별 심층 분석 (4단계)
 
 ```mermaid
 flowchart TD
-    POOL["분석 풀\n최대 80종목"] --> PAR["병렬 분석\nmax_workers=5\ntimeout=60s"]
+    POOL["분석 풀<br/>최대 80종목"] --> PAR["병렬 분석<br/>max_workers=5<br/>timeout=60s"]
 
-    PAR --> T["1단계\n기술적 지표\ntech_score 0~100"]
-    PAR --> ML["2단계\nML 앙상블\nml_score 0~100"]
-    PAR --> N["3단계\n뉴스 감성 분석\nsentiment -100~100"]
+    PAR --> T["1단계<br/>기술적 지표<br/>tech_score 0~100"]
+    PAR --> ML["2단계<br/>ML 앙상블<br/>ml_score 0~100"]
+    PAR --> N["3단계<br/>뉴스 감성 분석<br/>sentiment -100~100"]
 
-    T & ML & N --> GPT["4단계\nGPT-4o-mini\nAI 종합 의견"]
-    GPT --> C["종합 점수 산출\ntech×0.40 + ml×0.35\n+ sentiment_norm×0.25"]
-    C --> Q["버킷 쿼터 기반\n최종 N종목 선정\n섹터 다양성 고려"]
-    Q --> DB[("SQLite DB\n날짜별 저장")]
-    Q --> TG["텔레그램\n리포트 발송"]
+    T & ML & N --> GPT["4단계<br/>GPT-4o-mini<br/>AI 종합 의견"]
+    GPT --> C["종합 점수 산출<br/>tech×0.40 + ml×0.35<br/>+ sentiment_norm×0.25"]
+    C --> Q["버킷 쿼터 기반<br/>최종 N종목 선정<br/>섹터 다양성 고려"]
+    Q --> DB[("SQLite DB<br/>날짜별 저장")]
+    Q --> TG["텔레그램<br/>리포트 발송"]
 ```
 
 #### 1단계 — 기술적 지표 (tech_score, 0–100)
@@ -264,11 +234,11 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    T["Tech Score\n0~100"] -->|"× 0.40"| SUM["종합 점수\n0~100"]
-    ML["ML Score\n0~100"] -->|"× 0.35"| SUM
-    N["News Score\n-100~100\n→ 정규화 0~100"] -->|"× 0.25"| SUM
+    T["Tech Score<br/>0~100"] -->|"× 0.40"| SUM["종합 점수<br/>0~100"]
+    ML["ML Score<br/>0~100"] -->|"× 0.35"| SUM
+    N["News Score<br/>-100~100<br/>→ 정규화 0~100"] -->|"× 0.25"| SUM
 
-    SUM --> FB["※ ML 모델 없을 때\ntech×0.65 + sentiment_norm×0.35"]
+    SUM --> FB["※ ML 모델 없을 때<br/>tech×0.65 + sentiment_norm×0.35"]
 
     style FB fill:#f9f,stroke:#999,stroke-dasharray:5 5
 ```
@@ -733,23 +703,23 @@ NAVER_CLIENT_SECRET
 
 ```mermaid
 flowchart TD
-    TRIGGER["⏰ 16:30 KST\n평일 자동 실행\n(또는 수동 workflow_dispatch)"]
-    TRIGGER --> TRADING{"한국 증시\n거래일?"}
+    TRIGGER["⏰ 16:30 KST<br/>평일 자동 실행<br/>(또는 수동 workflow_dispatch)"]
+    TRIGGER --> TRADING{"한국 증시<br/>거래일?"}
 
     TRADING -- 휴장 --> SKIP["📅 텔레그램 휴장일 알림"]
 
-    TRADING -- 거래일 --> OUTCOME["지난 추천 성과 기록\n5·10·20거래일 후 수익률 집계\n→ 텔레그램 성과 리포트"]
-    OUTCOME --> STOCKLIST["KOSPI + KOSDAQ\n전체 종목 리스트 갱신"]
-    STOCKLIST --> BUCKETS["버킷 기반 후보군 선정\n거래량 상위 / 상승 모멘텀 / 반등 후보"]
-    BUCKETS --> ANALYSIS["심층 분석 (병렬)\n기술 + ML + 뉴스 + GPT"]
-    ANALYSIS --> SELECT["종합 점수 상위 9종목 선정\n버킷 쿼터 + 섹터 다양성"]
-    SELECT --> SAVE[("SQLite DB\n날짜별 저장")]
-    SAVE --> ARTIFACT["GitHub Artifact 백업\n(90일 보존)"]
-    SAVE --> COMMIT["저장소에 DB\n커밋·푸시"]
-    COMMIT --> NOTIFY["📱 텔레그램\n추천 리포트 발송"]
+    TRADING -- 거래일 --> OUTCOME["지난 추천 성과 기록<br/>5·10·20거래일 후 수익률 집계<br/>→ 텔레그램 성과 리포트"]
+    OUTCOME --> STOCKLIST["KOSPI + KOSDAQ<br/>전체 종목 리스트 갱신"]
+    STOCKLIST --> BUCKETS["버킷 기반 후보군 선정<br/>거래량 상위 / 상승 모멘텀 / 반등 후보"]
+    BUCKETS --> ANALYSIS["심층 분석 (병렬)<br/>기술 + ML + 뉴스 + GPT"]
+    ANALYSIS --> SELECT["종합 점수 상위 9종목 선정<br/>버킷 쿼터 + 섹터 다양성"]
+    SELECT --> SAVE[("SQLite DB<br/>날짜별 저장")]
+    SAVE --> ARTIFACT["GitHub Artifact 백업<br/>(90일 보존)"]
+    SAVE --> COMMIT["저장소에 DB<br/>커밋·푸시"]
+    COMMIT --> NOTIFY["📱 텔레그램<br/>추천 리포트 발송"]
 
-    COMMIT --> SYNC1["git clone 환경\ngit pull"]
-    COMMIT --> SYNC2["PyPI 설치 환경\nkoreanstocks sync --force"]
+    COMMIT --> SYNC1["git clone 환경<br/>git pull"]
+    COMMIT --> SYNC2["PyPI 설치 환경<br/>koreanstocks sync --force"]
 ```
 
 ---
