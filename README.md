@@ -70,31 +70,54 @@ DB          SQLite
 
 ## 🏗 시스템 아키텍처
 
-```
-🖥  CLI (koreanstocks)
-      serve · recommend · analyze · train · outcomes · sync · init · home
-        ↕ 명령 위임                              ↕ 서버 기동
-🧠  Core Engine (koreanstocks.core)       ⚡  FastAPI API (koreanstocks.api)
-  ├─ engine/                                routers/
-  │   indicators.py      기술적 지표           recommendations · analysis
-  │   prediction_model.py ML 앙상블           watchlist · backtest
-  │   news_agent.py      뉴스 감성            market · models
-  │   analysis_agent.py  심층 분석
-  │   recommendation_agent.py 종목 추천           ↓ JSON 응답
-  │   trainer.py         ML 재학습        🌐  Frontend
-  │   scheduler.py       자동화              dashboard.html (대시보드 6탭)
-  └─ utils/                                index.html  (Reveal.js 브리핑)
-      backtester.py      백테스팅
-      notifier.py        텔레그램
-      outcome_tracker.py 성과 추적
-        ↕ 데이터 수집 / DB R&W
-📊  Data Layer
-      provider.py   FinanceDataReader + KIND API (전체 종목, OHLCV)
-      database.py   SQLite CRUD
-        ↕ 영속 저장
-💾  저장소
-      data/storage/stock_analysis.db   SQLite DB
-      models/saved/*.pkl               학습된 ML 모델
+```mermaid
+graph TD
+    CLI["🖥 CLI<br/>serve · recommend · analyze<br/>train · outcomes · sync · init · home"]
+
+    subgraph CORE["🧠 Core Engine  (koreanstocks.core)"]
+        subgraph ENGINE["engine/"]
+            E1["indicators.py<br/>기술적 지표"]
+            E2["prediction_model.py<br/>ML 앙상블"]
+            E3["news_agent.py<br/>뉴스 감성"]
+            E4["analysis_agent.py<br/>심층 분석"]
+            E5["recommendation_agent.py<br/>종목 추천"]
+            E6["trainer.py<br/>ML 재학습"]
+            E7["scheduler.py<br/>자동화"]
+        end
+        subgraph UTILS["utils/"]
+            U1["backtester.py<br/>백테스팅"]
+            U2["notifier.py<br/>텔레그램"]
+            U3["outcome_tracker.py<br/>성과 추적"]
+        end
+    end
+
+    subgraph API["⚡ FastAPI API  (koreanstocks.api)"]
+        R["routers/<br/>recommendations · analysis<br/>watchlist · backtest · market · models"]
+    end
+
+    subgraph FRONTEND["🌐 Frontend"]
+        F1["dashboard.html<br/>인터랙티브 대시보드 (6탭)"]
+        F2["index.html<br/>Reveal.js 브리핑"]
+    end
+
+    subgraph DATA["📊 Data Layer"]
+        D1["provider.py<br/>FinanceDataReader · KIND API"]
+        D2["database.py<br/>SQLite CRUD"]
+    end
+
+    subgraph STORAGE["💾 저장소"]
+        S1[("stock_analysis.db<br/>SQLite DB")]
+        S2["models/saved/*.pkl<br/>학습된 ML 모델"]
+    end
+
+    CLI -->|명령 위임| CORE
+    CLI -->|서버 기동| API
+    API -->|JSON 응답| FRONTEND
+    API --> CORE
+    CORE --> DATA
+    DATA --> S1
+    E6 --> S2
+    E2 --> S2
 ```
 
 ```
