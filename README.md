@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.3.8-blue)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
 
 > **KOSPI · KOSDAQ 종목을 AI와 머신러닝으로 분석하는 자동화 투자 보조 플랫폼**
 
@@ -47,6 +47,7 @@
 | **테마 필터링** | AI · 반도체 · 이차전지 · 바이오 등 테마별 종목 발굴 |
 | **뉴스 기사 링크** | 감성 분석에 활용된 뉴스 기사 원문 링크 제공 |
 | **추천 성과 추적** | 5·10·20거래일 후 실제 수익률 자동 검증, 승률·목표가 달성률 통계 제공 (Web UI + CLI + 텔레그램) |
+| **가치주 스크리닝** | PER·PBR·ROE·부채비율·Piotroski F-Score 필터 + value_score 정렬, DART 기반 펀더멘털 자동 수집, 당일 인메모리 캐시 |
 
 ---
 
@@ -54,7 +55,7 @@
 
 ```
 UI          FastAPI + Reveal.js (일일 브리핑) + Vanilla JS (인터랙티브 대시보드)
-CLI         Typer (koreanstocks serve / recommend / analyze / train / init / sync / home / outcomes)
+CLI         Typer (koreanstocks serve / recommend / analyze / train / init / sync / home / outcomes / value)
 AI/LLM      OpenAI GPT-4o-mini
 ML          Scikit-learn (Random Forest, Gradient Boosting), XGBoost Ranker, LightGBM, CatBoost
 기술 지표    ta (RSI, MACD, BB, SMA, OBV, ADX, VWAP, CMF, MFI, Stochastic, CCI, ATR, Donchian)
@@ -72,7 +73,7 @@ DB          SQLite
 
 ```mermaid
 graph TD
-    CLI["🖥 CLI<br/>serve · recommend · analyze<br/>train · outcomes · sync · init · home"]
+    CLI["🖥 CLI<br/>serve · recommend · analyze<br/>train · outcomes · sync · init · home · value"]
 
     subgraph CORE["🧠 Core Engine  (koreanstocks.core)"]
         subgraph ENGINE["engine/"]
@@ -92,11 +93,11 @@ graph TD
     end
 
     subgraph API["⚡ FastAPI API  (koreanstocks.api)"]
-        R["routers/<br/>recommendations · analysis<br/>watchlist · backtest · market · models"]
+        R["routers/<br/>recommendations · analysis<br/>watchlist · backtest · market · models · value"]
     end
 
     subgraph FRONTEND["🌐 Frontend"]
-        F1["dashboard.html<br/>인터랙티브 대시보드 (6탭)"]
+        F1["dashboard.html<br/>인터랙티브 대시보드 (7탭)"]
         F2["index.html<br/>Reveal.js 브리핑"]
     end
 
@@ -126,8 +127,8 @@ KoreanStocks/
 ├── requirements.txt                     # 개발/테스트 전용 (pytest 등)
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.3.8"
-│       ├── cli.py                       # Typer CLI (serve/recommend/analyze/train/init/sync/home/outcomes)
+│       ├── __init__.py                  # VERSION = "0.4.0"
+│       ├── cli.py                       # Typer CLI (serve/recommend/analyze/train/init/sync/home/outcomes/value)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리, StaticFiles 마운트
 │       │   ├── dependencies.py          # 공통 의존성
@@ -137,10 +138,11 @@ KoreanStocks/
 │       │       ├── watchlist.py         # CRUD /api/watchlist
 │       │       ├── backtest.py          # GET /api/backtest
 │       │       ├── market.py            # GET /api/market
-│       │       └── models.py            # GET /api/model_health
+│       │       ├── models.py            # GET /api/model_health
+│       │       └── value.py             # GET /api/value_stocks (가치주 스크리닝)
 │       ├── static/
 │       │   ├── index.html               # Reveal.js 일일 브리핑 슬라이드
-│       │   ├── dashboard.html           # 인터랙티브 대시보드 (6탭)
+│       │   ├── dashboard.html           # 인터랙티브 대시보드 (7탭)
 │       │   ├── js/
 │       │   │   ├── slides.js            # 슬라이드 동적 생성
 │       │   │   └── dashboard.js         # 대시보드 인터랙션
@@ -149,17 +151,19 @@ KoreanStocks/
 │       └── core/
 │           ├── config.py                # 환경변수 및 설정 관리 (VERSION 포함)
 │           ├── data/
-│           │   ├── provider.py          # 주가 데이터 수집 (FinanceDataReader + KIND API)
-│           │   └── database.py          # SQLite 관리 (분석 결과, 워치리스트)
+│           │   ├── provider.py              # 주가 데이터 수집 (FinanceDataReader + KIND API)
+│           │   ├── fundamental_provider.py  # DART 기반 펀더멘털 수집 (ROE·부채비율·PER·PBR)
+│           │   └── database.py              # SQLite 관리 (분석 결과, 워치리스트)
 │           ├── engine/
-│           │   ├── indicators.py        # 기술적 지표 계산 (RSI, MACD, BB, SMA, OBV)
-│           │   ├── strategy.py          # 전략별 시그널 생성 (TechnicalStrategy)
-│           │   ├── prediction_model.py  # ML 앙상블 예측 (RF · GB · LGB · CB · XGBRanker 앙상블)
-│           │   ├── news_agent.py        # 뉴스 수집 + 감성 분석 (GPT-4o-mini)
-│           │   ├── analysis_agent.py    # 종목 심층 분석 오케스트레이터
+│           │   ├── indicators.py            # 기술적 지표 계산 (RSI, MACD, BB, SMA, OBV)
+│           │   ├── strategy.py              # 전략별 시그널 생성 (TechnicalStrategy)
+│           │   ├── prediction_model.py      # ML 앙상블 예측 (RF · GB · LGB · CB · XGBRanker 앙상블)
+│           │   ├── news_agent.py            # 뉴스 수집 + 감성 분석 (GPT-4o-mini)
+│           │   ├── analysis_agent.py        # 종목 심층 분석 오케스트레이터
 │           │   ├── recommendation_agent.py  # 버킷 기반 종목 선정 + 추천 생성
-│           │   ├── trainer.py           # ML 모델 학습 워크플로우
-│           │   └── scheduler.py         # 자동화 워크플로우
+│           │   ├── value_screener.py        # 가치주 스크리닝 엔진 (Piotroski F-Score + value_score)
+│           │   ├── trainer.py               # ML 모델 학습 워크플로우
+│           │   └── scheduler.py             # 자동화 워크플로우
 │           └── utils/
 │               ├── backtester.py        # 전략 성과 검증 엔진
 │               ├── notifier.py          # 텔레그램 리포트 발송
@@ -710,7 +714,7 @@ koreanstocks serve
 
 브라우저가 자동으로 열리며 `http://localhost:8000/dashboard` 접속
 - `/` — Reveal.js 일일 브리핑 슬라이드
-- `/dashboard` — 인터랙티브 대시보드 (6탭)
+- `/dashboard` — 인터랙티브 대시보드 (7탭)
 - `/docs` — FastAPI Swagger UI
 
 > **권장 브라우저: Chrome / Firefox (최신 버전)**
@@ -771,9 +775,10 @@ flowchart TD
 | **Dashboard** | `/dashboard` | 시장 지수, Portfolio 요약, 날짜별 AI 추천 리포트, 추천 지속성 히트맵 |
 | **Watchlist** | `/dashboard#watchlist` | 관심 종목 등록/삭제, 실시간 심층 분석, 분석 이력 타임라인 |
 | **AI 추천** | `/dashboard#recommendations` | 테마·시장별 추천 생성, 날짜 선택 히스토리, 추천 지속성 히트맵, 📊 추천 성과 추적 (5·10·20거래일 승률·목표가 달성률) |
+| **가치주 추천** | `/dashboard#value` | PER·PBR·ROE·부채비율·F-Score 필터 기반 중기(3~6개월) 가치주 스크리닝, 초보자 지표 가이드, 탐색 범위(100/200/300종목) 설정 |
 | **백테스트** | `/dashboard#backtest` | RSI/MACD/COMPOSITE 전략 시뮬레이션, B&H 비교 차트, 초보자 해석 가이드 |
-| **설정** | `/dashboard#settings` | 수동 자동화 실행, 텔레그램 설정 상태 확인 |
 | **모델 신뢰도** | `/dashboard#model` | ML 모델 AUC·과적합 갭·드리프트 등급·피처 중요도·재학습 권장 여부 확인 |
+| **설정** | `/dashboard#settings` | 수동 자동화 실행, 텔레그램 설정 상태 확인 |
 | **브리핑** | `/` | Reveal.js 일일 슬라이드 (종목별 점수·뉴스·AI 의견) |
 | **API 문서** | `/docs` | FastAPI Swagger UI |
 
@@ -781,48 +786,32 @@ flowchart TD
 
 ## 📝 변경 이력
 
-### v0.3.8 (2026-03-05) — 기술 부채 해소 + 버전 단일 소스 구조
+### v0.4.0 (2026-03-06) — 가치주 스크리닝 기능 추가
 
-- ✨ `/api/version` 엔드포인트 신설 — 대시보드가 API로 버전 동적 조회
-- 🔧 버전 단일 소스 (`__init__.py`) → `app.py`·`config.py`에서 직접 임포트
-- 🐛 `prediction_model.py` `mom_accel` 공식 수정 — 학습/추론 불일치 해소 (`return_1m - return_3m/3`)
-- 🔧 `prediction_model.py` 미사용 레거시 임포트 제거 (Regressor, LinearRegression 등)
-- 🐛 `analysis_agent.py` GPT 프롬프트 "5거래일" → "10거래일" 정정
-- 🔧 `market.py` `os.getenv` → `config.*` 전환, 하드코딩 모델명 제거
-- 🔧 `provider.py` `import requests` 모듈 최상단 이동
-- 📝 `docs/` 3건 현행화 (버전·날짜·`mom_accel` 해소 한계 항목 제거)
+- ✨ `가치주 추천` 탭 신설 (대시보드 7번째 탭) — PER·PBR·ROE·부채비율·F-Score 필터 + 가치점수 정렬, 초보자용 지표 가이드
+- ✨ `koreanstocks value` CLI 명령어 신설 — 가치주 스크리닝 터미널 직접 실행
+- ✨ `GET /api/value_stocks` 엔드포인트 신설 — Piotroski F-Score + value_score 복합 정렬
+- 🐛 `fundamental_provider.py` DART 재작성 — ROE·부채비율 대차대조표에서 직접 계산 (wisereport AJAX 불가 해소)
+- 🔧 `provider.py` `get_value_candidates()` 신설 — 시가총액 기준 PER/ROE 사전 필터 후보군 병렬 수집
+- 🔧 `value_screener.py` 당일 인메모리 캐시 — 동일 조건 재실행 즉시 반환 (1~2분 → 0초)
+- 🔧 대시보드 탐색 범위 드롭다운(100/200/300종목) — candidate_limit 직접 노출, 의미 있는 UX
+- 📝 `docs/VALUE_SCREENING.md` 신설 — 가치주 스크리닝 시스템 전체 기술 문서 (후보군·DART·필터·F-Score·value_score·캐시·API·CLI)
 
-### v0.3.7 (2026-03-05) — 5-모델 앙상블 + 피처 개선
+### v0.3.x (2026-02-28 ~ 2026-03-05) — 추천 성과 추적 · 버킷 UI · pykrx 제거 · 5-모델 앙상블 · 기술 부채 해소
 
-- ✨ LightGBM, CatBoost 모델 추가 — 5-모델 앙상블 (RF · GB · LGB · CB · XGBRanker)
+- ✨ 추천 성과 추적 기능 (5·10·20거래일 후 실적 검증, `outcomes` CLI 및 Web UI)
+- ✨ 추천 버킷(거래량 상위/상승 모멘텀/반등 후보) 배지 UI — 대시보드·슬라이드 동시 반영
+- ✨ 기본 추천 종목 수 5 → 9개 상향, 분석 설정 종목 수 자동 선택 로직
+- ✨ LightGBM · CatBoost 모델 추가 → 5-모델 앙상블 (RF · GB · LGB · CB · XGBRanker)
 - ✨ XGBoost 이진 분류 → XGBRanker (rank:ndcg) 교체 — 크로스섹셔널 순위 직접 최적화
-- 🔧 atr_ratio → rolling 60일 percentile 변환 — 시장 레짐 의존성 제거
-- 🔧 피처 교체: adx_di_diff·cmf·vol_ratio → bb_position·mfi·low_52w_ratio (정보력 향상)
-- 🔧 LightGBM 강한 정규화: max_depth=2, num_leaves=4, min_child_samples=100 (과적합 갭 0.137→0.068)
-- 🎨 모델 신뢰도 탭: 5개 모델 표시, test_logloss null 안전 처리, XGBRanker 캘리브레이션
-
-### v0.3.6 (2026-03-04)
-
-- 🐛 `/api/market` NaN → JSON 직렬화 오류 수정 (`market.py` 방어 레이어 + `provider.py` 근본 원인 수정)
-- 🔧 모델 경로 `pathlib.Path` 전환 (`prediction_model.py`, `trainer.py`) — CLAUDE.md 코딩 규칙 준수
-- 🔧 버킷 상수 `core/constants.py`로 통합 (`BUCKET_LABELS`, `BUCKET_RATIOS`, `BUCKET_DEFAULT`) — 3곳 중복 제거
-
-### v0.3.5 (2026-03-03)
-
-- ✨ 추천 버킷(거래량 상위/상승 모멘텀/반등 후보) 배지 UI 추가 — 대시보드·슬라이드 동시 반영
-- ✨ 기본 추천 종목 수 5 → 9개로 상향 (scheduler, CLI, API 일괄 변경)
-- ✨ 분석 설정 종목 수 자동 선택 로직 (전체 시장 → 9개, 테마 지정 → 5개)
-- 🎨 버킷 배지 색상 CSS 변수 적용 — 다크/라이트 테마 모두 가시성 보장
-- 🐛 CLI `recommend` 명령이 `--limit` 인수를 scheduler에 전달하지 않던 버그 수정
-- 🔧 종목 수 드롭다운 5개·9개 두 가지로 단순화 (3·10·15 제거)
-- 🔧 힌트 문구 레이아웃 개선 — 카드 제목 옆 인라인 배치 (flex baseline)
-- 🔧 pykrx 라이브러리 제거 (FinanceDataReader + KIND API 단독 운용)
-
-### v0.3.4 (2026-02-28)
-
-- ✨ 추천 성과 추적 기능 추가 (5·10·20거래일 후 실적 검증, `outcomes` CLI)
-- ✨ 뉴스 캐시 TTL 1시간 단위로 변경 (장중 새 공시 반영)
-- 🔧 감성 분석 퀀트 애널리스트 시스템 프롬프트 + 분포 지침 추가 (편향 해소)
+- ✨ `/api/version` 엔드포인트 신설 — 대시보드가 API로 버전 동적 조회
+- 🐛 `/api/market` NaN → JSON 직렬화 오류 수정
+- 🐛 `prediction_model.py` `mom_accel` 공식 수정 — 학습/추론 불일치 해소
+- 🐛 CLI `recommend` 명령 `--limit` 인수 누락 버그 수정
+- 🔧 pykrx 완전 제거 → FinanceDataReader + KIND API (KRX 정책 변경 대응)
+- 🔧 버전 단일 소스 (`__init__.py`) 구조 확립, 버킷 상수 `core/constants.py` 통합
+- 🔧 atr_ratio → rolling 60일 percentile 변환, 피처 교체 (bb_position·mfi·low_52w_ratio)
+- 🔧 뉴스 캐시 TTL 1시간, 감성 분석 퀀트 애널리스트 프롬프트 추가
 
 ---
 

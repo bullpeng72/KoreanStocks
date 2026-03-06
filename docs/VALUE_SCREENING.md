@@ -1,0 +1,472 @@
+# 가치주 스크리닝 시스템 기술 문서
+
+> Korean Stocks AI/ML Analysis System `v0.4.0`
+> 최종 업데이트: 2026-03-06
+
+---
+
+## 목차
+
+1. [개요](#1-개요)
+2. [후보군 수집](#2-후보군-수집)
+3. [펀더멘털 수집](#3-펀더멘털-수집)
+4. [필터 체인](#4-필터-체인)
+5. [Piotroski F-Score](#5-piotroski-f-score)
+6. [value_score](#6-value_score)
+7. [인메모리 캐시](#7-인메모리-캐시)
+8. [API 레퍼런스](#8-api-레퍼런스)
+9. [CLI](#9-cli)
+10. [대시보드 UI](#10-대시보드-ui)
+11. [설계 원칙 및 한계](#11-설계-원칙-및-한계)
+
+---
+
+## 1. 개요
+
+가치주 스크리닝은 **중기(3-6개월) 관점**으로 저평가·우량 종목을 펀더멘털 기반으로 발굴한다.
+AI 추천 파이프라인(tech/ML/뉴스 단기 신호)과는 독립적으로 동작하는 별도 스크리너다.
+
+> **투자 시계:** 3-6개월. 기술적 지표(단기 5-60일) 및 ML 모델(10거래일)과는 목적이 다르다.
+
+주요 담당 모듈:
+- `src/koreanstocks/core/data/provider.py` → `get_value_candidates()` (후보군 수집)
+- `src/koreanstocks/core/data/fundamental_provider.py` → `FundamentalProvider` (DART 수집)
+- `src/koreanstocks/core/engine/value_screener.py` → `ValueScreener` (필터 + 점수)
+- `src/koreanstocks/api/routers/value.py` → `GET /api/value_stocks`
+
+```
+후보군 수집 (시가총액 상위 N종목 + PER/ROE 사전 필터)
+  → 펀더멘털 병렬 수집 (DART API + SQLite 당일 캐시)
+  → 필터 체인 (6단계 하드 필터)
+  → Piotroski F-Score 계산 (0-9)
+  → value_score 산출 (0-100)
+  → F-Score 우선 · 동점 시 value_score 내림차순 정렬
+  → 통과 전 종목 반환
+```
+
+---
+
+## 2. 후보군 수집
+
+담당: `DataProvider.get_value_candidates(limit, market, per_max, roe_min)`
+
+### 2-1. 데이터 소스
+
+네이버 금융 **시가총액 순위 페이지**(`finance.naver.com/sise/sise_market_sum.naver`)를 사용한다.
+이 페이지는 시가총액 내림차순으로 정렬된 종목 목록과 함께 PER·ROE 컬럼을 포함한다.
+
+```
+URL: https://finance.naver.com/sise/sise_market_sum.naver
+     ?sosok={시장코드}&page={페이지번호}
+  sosok: 0 = KOSPI, 1 = KOSDAQ
+```
+
+### 2-2. 수집 절차
+
+1. 목표 종목 수(`limit`) 달성까지 페이지를 병렬 수집 (최대 10페이지, 페이지당 50종목)
+2. 응답 HTML에서 `<thead>` 컬럼 순서를 동적으로 파싱 → PER·ROE 컬럼 인덱스 탐지
+3. 사전 필터: `PER <= 0 or PER > per_max * 1.5` 또는 `ROE < roe_min - 5` → 제외
+4. **시가총액 내림차순 순서 유지**하여 반환
+
+> `per_max * 1.5` 및 `roe_min - 5`는 여유 상한으로 설정한다. 실제 하드 필터는 Step 4에서 DART 검증 후 재적용한다.
+
+### 2-3. 시장 필터
+
+| `market` 값 | 수집 대상 |
+|------------|----------|
+| `ALL` | KOSPI + KOSDAQ 병합 (시가총액 합산 정렬) |
+| `KOSPI` | KOSPI만 |
+| `KOSDAQ` | KOSDAQ만 |
+
+---
+
+## 3. 펀더멘털 수집
+
+담당: `FundamentalProvider.get_fundamentals_batch(codes, max_workers=15)`
+
+### 3-1. DART API
+
+금융감독원 전자공시시스템 Open API(`opendart.fss.or.kr`)의 단일 회사 재무제표 엔드포인트를 사용한다.
+
+```
+GET https://opendart.fss.or.kr/api/fnlttSinglAcnt.json
+  crtfc_key: DART_API_KEY
+  corp_code:  종목코드 → corp_code 매핑
+  bsns_year:  사업연도 (전년도 기준)
+  reprt_code: 11011 (사업보고서) | 11012 (반기보고서)
+  fs_div:     CFS (연결재무제표) → 없으면 OFS (개별재무제표)
+```
+
+### 3-2. 연도 폴백 순서
+
+3월 기준으로 전년도 사업보고서가 미제출된 경우가 많으므로 3단계 폴백을 적용한다:
+
+```
+1순위: (year-1, 11011) — 전년도 사업보고서
+2순위: (year-1, 11012) — 전년도 반기보고서
+3순위: (year-2, 11011) — 전전년도 사업보고서 (3월 이전 폴백)
+```
+
+### 3-3. 수집 항목 및 계산
+
+| 항목 | DART 계정명 | 비고 |
+|------|------------|------|
+| 매출액 | `매출액` | IS — 일부 금융사는 없음 |
+| 영업이익 | `영업이익` | IS |
+| 당기순이익 | `당기순이익` | IS |
+| 부채총계 | `부채총계` | BS |
+| 자본총계 | `자본총계` | BS |
+
+**계산 항목:**
+
+```python
+부채비율 = 부채총계 / 자본총계 × 100    (%)
+ROE      = 당기순이익 / 자본총계 × 100  (%)
+```
+
+### 3-4. SQLite 캐시 (`fundamental_cache`)
+
+종목당 당일 1회 DART 호출로 제한한다.
+
+```sql
+CREATE TABLE fundamental_cache (
+    code        TEXT NOT NULL,
+    cache_date  TEXT NOT NULL,    -- YYYY-MM-DD
+    data_json   TEXT NOT NULL,    -- JSON 직렬화 펀더멘털 데이터
+    PRIMARY KEY (code, cache_date)
+);
+```
+
+| 상황 | 동작 |
+|------|------|
+| 당일 동일 종목 재요청 | SQLite 캐시 히트 → DART 미호출 |
+| 익일 요청 | 캐시 미스 → DART 재호출 |
+| DART 미설정 시 | Naver 재무 요약 폴백 (PER·PBR·ROE·부채비율) |
+
+---
+
+## 4. 필터 체인
+
+6단계를 **순서대로** 적용하며, 하나라도 탈락하면 즉시 제외한다.
+
+| 순서 | 필터 | 기본 임계값 | 목적 |
+|------|------|-----------|------|
+| 1 | 영업이익 흑자 | 필수 | 적자 기업 완전 배제 (가치함정 1차 방어) |
+| 2 | PER | ≤ 25.0 | 고평가 주식 제거 (음수 PER = 적자 기업도 제거) |
+| 3 | PBR | ≤ 3.0 | 자산 대비 과도한 프리미엄 제거 |
+| 4 | ROE | ≥ 8.0% | 자본 효율성 최저 기준 |
+| 5 | 부채비율 | ≤ 150% | 재무 안전성 기준 |
+| 6 | 매출 YoY | ≥ -15% | 심각한 매출 역성장 배제 (가치함정 2차 방어) |
+
+이후 Piotroski F-Score 최소값(`f_score_min`, 기본 4점) 미달 종목도 제외한다.
+
+**데이터 없음 처리:**
+- PER과 PBR 모두 없으면 → 판단 불가 → 제외
+- 매출 YoY 없으면 → 통과 허용 (보수적 허용 — 신규 상장 등)
+- 기타 항목 없으면 → 해당 필터 건너뜀
+
+---
+
+## 5. Piotroski F-Score
+
+담당: `value_screener.piotroski_score(f)` → `(int, Dict[str, bool])`
+
+F-Score는 수익성·안전성·성장성 각 3개 항목을 체크해 최대 9점을 부여한다.
+높을수록 재무 건전성이 우수하다.
+
+### 5-1. 수익성 (Profitability, 3점)
+
+| 코드 | 항목 | 조건 |
+|------|------|------|
+| P1 | 영업이익 흑자 | `op_income_positive == True` |
+| P2 | ROE 양수 | `roe > 0` |
+| P3 | ROE 전년 대비 개선 | `roe_improved == True` |
+
+### 5-2. 안전성 (Leverage & Safety, 3점)
+
+| 코드 | 항목 | 조건 |
+|------|------|------|
+| L1 | 부채비율 100% 미만 | `debt_ratio < 100` |
+| L2 | 부채비율 전년 대비 감소 | `debt_decreased == True` |
+| L3 | 배당 지급 이력 | `dividend_yield > 0` |
+
+### 5-3. 성장성 및 효율성 (Efficiency, 3점)
+
+| 코드 | 항목 | 조건 |
+|------|------|------|
+| E1 | 영업이익 흑자 재확인 | P1과 동일 (중복 확인) |
+| E2 | 영업이익 YoY 성장 | `op_income_yoy > 0` |
+| E3 | 매출 역성장 없음 | `revenue_yoy > -5%` |
+
+### 5-4. 점수 해석
+
+| F-Score | 해석 |
+|---------|------|
+| 7-9 | 재무 우량 — 강력 추천 구간 |
+| 4-6 | 보통 — 기본 필터 통과 수준 |
+| 0-3 | 재무 취약 — 제외 |
+
+---
+
+## 6. value_score
+
+담당: `value_screener.value_score(f, sector_per_median)` → `float` (0-100)
+
+5개 요소의 **가용 데이터 기반 정규화 점수**를 합산한다.
+데이터가 없는 항목은 분모에서도 제외하여 나머지 항목 기준으로 100점 재산출한다.
+
+### 6-1. 구성 요소
+
+| 요소 | 배점 | 만점 조건 | 최저 조건 |
+|------|------|---------|---------|
+| PER | 25pt | 업종 중앙값 대비 0% | 업종 중앙값의 2.5배 이상 → 0pt |
+| PBR | 20pt | PBR = 0 (자산 가치 무한 할인) | PBR ≥ 4.0 → 0pt |
+| ROE | 20pt | ROE ≥ 20% | ROE ≤ 0% → 0pt |
+| 부채비율 | 20pt | 부채비율 = 0% | 부채비율 ≥ 200% → 0pt |
+| 영업이익 YoY | 15pt | 영이YoY ≥ 30% | 영이YoY ≤ 0% → 0pt |
+
+### 6-2. PER 상대 평가 방식
+
+PER은 업종 중앙값(`sector_per_median`, 기본 12.0)과의 상대값으로 평가한다.
+
+```python
+ratio = min(per / sector_per_median, 2.5)
+per_score = max(0.0, 25 * (1 - ratio / 2.5))
+```
+
+예시: PER 10 (중앙값 12) → ratio = 0.833 → `25 * (1 - 0.333)` = **16.7pt**
+
+### 6-3. 정규화
+
+```python
+earned   = sum(각 요소 득점)
+possible = sum(각 요소 만점)   # 데이터 없는 요소는 제외
+value_score = round(earned / possible * 100, 1)
+```
+
+데이터 전무 시 기본값 50.0 반환.
+
+---
+
+## 7. 인메모리 캐시
+
+담당: `ValueScreener._cache` (프로세스 내)
+
+### 캐시 키
+
+```python
+cache_key = (market, per_max, pbr_max, roe_min, debt_max,
+             revenue_yoy_min, f_score_min, candidate_limit, limit)
+```
+
+필터 파라미터가 완전히 동일한 요청에 대해서만 캐시를 적용한다.
+
+### 유효 기간 및 무효화
+
+```python
+today = date.today()
+if self._cache_date != today:
+    self._cache.clear()       # 날짜 변경 시 전체 초기화
+    self._cache_date = today
+```
+
+자정마다 자동 초기화된다. 하루 중 동일 조건 재요청은 즉시 반환한다.
+
+| 상황 | 소요 시간 |
+|------|---------|
+| 최초 스크리닝 (100종목 탐색) | 1-2분 |
+| 최초 스크리닝 (300종목 탐색) | 2-4분 |
+| 동일 조건 재요청 (캐시 히트) | 0.001초 미만 |
+| 날짜 변경 후 첫 요청 | 위와 동일 (재수집) |
+
+> 캐시는 프로세스 내 메모리에 한정된다. 서버 재시작 시 초기화된다.
+
+---
+
+## 8. API 레퍼런스
+
+### GET /api/value_stocks
+
+가치주 스크리닝 실행 및 결과 반환.
+
+**쿼리 파라미터:**
+
+| 파라미터 | 기본값 | 설명 |
+|---------|-------|------|
+| `market` | `ALL` | 시장 필터: `ALL` \| `KOSPI` \| `KOSDAQ` |
+| `per_max` | `25.0` | PER 상한 |
+| `pbr_max` | `3.0` | PBR 상한 |
+| `roe_min` | `8.0` | ROE 하한 (%) |
+| `debt_max` | `150.0` | 부채비율 상한 (%) |
+| `revenue_yoy_min` | `-15.0` | 매출 YoY 하한 (%) |
+| `f_score_min` | `4` | Piotroski F-Score 최소값 (0-9) |
+| `candidate_limit` | `200` | 탐색 범위 — 시가총액 상위 몇 종목을 후보로 볼지 (100-500) |
+
+**응답 스키마:**
+
+```json
+{
+  "stocks": [
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "market": "KOSPI",
+      "sector": "반도체",
+      "per": 13.2,
+      "pbr": 1.4,
+      "roe": 15.3,
+      "debt_ratio": 38.7,
+      "op_margin": 12.1,
+      "revenue_yoy": 5.2,
+      "op_income_yoy": 18.4,
+      "dividend_yield": 2.1,
+      "f_score": 7,
+      "f_checks": {
+        "P1_영업이익흑자": true,
+        "P2_ROE양수": true,
+        "P3_ROE개선": true,
+        "L1_부채100미만": true,
+        "L2_부채감소": false,
+        "L3_배당지급": true,
+        "E1_영업이익흑자확인": true,
+        "E2_영업이익성장": true,
+        "E3_매출역성장없음": true
+      },
+      "value_score": 72.4
+    }
+  ],
+  "total": 12
+}
+```
+
+> `fundamentals` 상세 데이터는 응답에서 제거된다 (내부 계산용).
+
+### GET /api/value_stocks/filters
+
+현재 기본 필터 임계값 반환.
+
+```json
+{
+  "per_max": 25.0,
+  "pbr_max": 3.0,
+  "roe_min": 8.0,
+  "debt_max": 150.0,
+  "revenue_yoy_min": -15.0,
+  "f_score_min": 4
+}
+```
+
+---
+
+## 9. CLI
+
+```bash
+# 기본 실행 (기본 필터, 상위 20종목 출력)
+koreanstocks value
+
+# 시장 + 출력 수 지정
+koreanstocks value --market KOSPI --limit 10
+
+# 필터 강화
+koreanstocks value --per-max 15 --roe-min 12 --f-score-min 5
+
+# 전체 옵션
+koreanstocks value \
+  --market ALL \
+  --limit 20 \
+  --per-max 25 \
+  --pbr-max 3.0 \
+  --roe-min 8 \
+  --debt-max 150 \
+  --f-score-min 4
+```
+
+**출력 예시:**
+
+```
+가치주 스크리닝 시작 (market=ALL, limit=20)...
+
+종목           PER    PBR    ROE   부채   영이YoY  F점  가치점
+──────────────────────────────────────────────────────────────
+삼성전자       13.2   1.40  15.3%  38.7%   18.4%   7/9   72.4
+POSCO홀딩스    10.8   0.90  12.1%  55.2%   22.1%   7/9   68.1
+...
+
+총 15종목 선정 (F-Score·가치점수 복합 정렬)
+```
+
+---
+
+## 10. 대시보드 UI
+
+`/dashboard` → **가치주 추천** 탭 (7번째 탭)
+
+### 필터 컨트롤
+
+| UI 요소 | 대응 파라미터 | 기본값 |
+|--------|------------|-------|
+| 시장 드롭다운 | `market` | ALL |
+| PER 상한 입력 | `per_max` | 25 |
+| PBR 상한 입력 | `pbr_max` | 3.0 |
+| ROE 하한 입력 | `roe_min` | 8 |
+| 부채비율 상한 입력 | `debt_max` | 150 |
+| F-Score 최소 입력 | `f_score_min` | 4 |
+| 탐색 범위 드롭다운 | `candidate_limit` | 200 (상위 100 / 200 / 300종목 선택) |
+
+### 결과 테이블 컬럼
+
+| 컬럼 | 설명 |
+|------|------|
+| 종목 | 종목명 (종목코드) |
+| 시장/섹터 | KOSPI/KOSDAQ · 업종 |
+| PER | 주가수익비율 |
+| PBR | 주가순자산비율 |
+| ROE | 자기자본이익률 (%) |
+| 부채비율 | 부채총계/자본총계 × 100 (%) |
+| 영이YoY | 영업이익 전년 대비 성장률 (%) |
+| F-Score | Piotroski 점수 (색상 배지: 0-3 빨강 / 4-6 노랑 / 7-9 초록) |
+| 가치점수 | value_score 0-100 (색상 배지) |
+
+### 지표 설명 가이드 (초보자용)
+
+탭 내 토글 펼침으로 각 지표의 직관적 설명을 제공한다:
+- PER: "순이익 대비 주가가 얼마나 비싼가" (PER 10 = 10년치 순이익을 지금 사는 것)
+- PBR: "자산보다 싸게 파나" (PBR 1.0 미만 = 안전마진 구간)
+- ROE: "맡긴 돈으로 얼마나 벌었나" (예금금리 대비 비교)
+- 부채비율: "내 돈 대비 빚이 얼마나 많나"
+- 영이YoY: "작년보다 본업 이익이 얼마나 늘었나" + 가치함정 경고
+- F-Score: 수익성/안전성/성장성 3개 카드로 시각화
+- 가치점수: 5개 세부 항목별 배점 설명
+
+---
+
+## 11. 설계 원칙 및 한계
+
+### 고정값 (임의 수정 금지)
+
+| 항목 | 값 | 이유 |
+|------|----|------|
+| 기본 필터 임계값 | `DEFAULT_FILTERS` 딕셔너리 | 백테스트 미검증 시 임의 변경 금지 |
+| 정렬 기준 | F-Score 우선, 동점 시 value_score | 재무 건전성 우선 |
+| PER 상대 평가 중앙값 | `sector_per_median=12.0` | 섹터별 중앙값 미구현 시 전 업종 통일 기준 |
+
+### 알려진 한계
+
+| 항목 | 내용 | 영향도 |
+|------|------|-------|
+| **중기 특화** | 3-6개월 가치 관점. 단기(1-4주) 주가 변동은 tech/ML 모듈이 담당 | 높음 |
+| DART 제출 시차 | 3월 기준 전년도 사업보고서 미제출 기업 많음 → 전전년도 폴백 | 중간 |
+| 금융주 특수성 | 은행·보험사는 매출액 계정 없음 → 부채비율·ROE만으로 판단 | 중간 |
+| 섹터별 PER 중앙값 미구현 | 현재 전 업종 동일 기준(12.0) 사용 — IT·바이오 등 고PER 업종에서 불이익 | 중간 |
+| 후보군 한계 | 시가총액 상위 N종목만 탐색 — 소형주·저유동성 우량주 누락 가능 | 낮음 |
+| 프로세스 재시작 시 캐시 소멸 | 인메모리 캐시 — 서버 재시작 후 첫 요청은 전체 재수집 필요 | 낮음 |
+| YoY 비교 기간 | 직전 보고서 기준 — 계절성·일회성 항목 반영 불가 | 낮음 |
+
+### 향후 개선 방향
+
+| 우선순위 | 항목 | 기대 효과 |
+|---------|------|---------|
+| 1 | 업종별 PER 중앙값 적용 | IT·바이오 등 고PER 업종의 공정 평가 |
+| 2 | 섹터 중립화 — 업종 내 상대 순위로 점수 비교 | 특정 섹터 쏠림 방지 |
+| 3 | 결과 SQLite 저장 + 이력 조회 | 날짜별 가치주 스크리닝 히스토리 비교 |
+| 4 | 소형주 풀 보완 — 거래량 하한 기준 추가 탐색 | 숨겨진 우량 소형주 발굴 |

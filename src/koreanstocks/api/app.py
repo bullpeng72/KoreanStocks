@@ -12,6 +12,7 @@ from koreanstocks.api.routers import (
     backtest,
     market,
     models,
+    value,
 )
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(backtest.router, prefix="/api")
     app.include_router(market.router, prefix="/api")
     app.include_router(models.router, prefix="/api")
+    app.include_router(value.router,  prefix="/api")
 
     # Static 파일 마운트 (Reveal.js + 대시보드)
     if STATIC_DIR.exists():

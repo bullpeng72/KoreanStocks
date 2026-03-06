@@ -16,9 +16,10 @@
   <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
   <button class="tab-btn" data-tab="watchlist">Watchlist</button>
   <button class="tab-btn" data-tab="recommendations">AI 추천</button>
+  <button class="tab-btn" data-tab="value">가치주 추천</button>
   <button class="tab-btn" data-tab="backtest">백테스트</button>
-  <button class="tab-btn" data-tab="settings">설정</button>
   <button class="tab-btn" data-tab="model">모델 신뢰도</button>
+  <button class="tab-btn" data-tab="settings">설정</button>
   <div class="nav-right">
     <a href="/">브리핑</a>
     <a href="/docs">API</a>
@@ -449,6 +450,231 @@
       <span style="color:var(--muted)">탭을 클릭하면 로드됩니다…</span>
     </div>
   </div><!-- /tab-model -->
+
+  <!-- ══════════════════════════════════════════════════════════
+       Tab 7 — 가치주 스크리너
+  ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="tab-value">
+
+    <!-- 필터 설정 -->
+    <div class="card">
+      <div class="card-title">⚙️ 스크리닝 필터</div>
+
+      <!-- 중기 투자 안내 -->
+      <div style="font-size:.78em;color:var(--muted);background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);border-radius:6px;padding:6px 10px;margin-bottom:14px">
+        🌱 <strong>중기 신호 (3~6개월)</strong> — 저PER·저PBR·고ROE·안전한 재무구조를 갖춘 가치주 발굴.
+        Piotroski F-Score와 가치 점수로 정렬합니다. 단기 모멘텀 추천과 별개입니다.
+      </div>
+
+      <div class="flex-row" style="flex-wrap:wrap;gap:14px">
+        <div>
+          <label class="inline-label">시장</label>
+          <select id="val-market">
+            <option value="ALL">전체</option>
+            <option value="KOSPI">KOSPI</option>
+            <option value="KOSDAQ">KOSDAQ</option>
+          </select>
+        </div>
+        <div>
+          <label class="inline-label">PER 상한</label>
+          <input type="number" id="val-per-max" value="25" min="1" max="100" step="1" style="width:80px" />
+        </div>
+        <div>
+          <label class="inline-label">PBR 상한</label>
+          <input type="number" id="val-pbr-max" value="3" min="0.1" max="20" step="0.1" style="width:80px" />
+        </div>
+        <div>
+          <label class="inline-label">ROE 하한 (%)</label>
+          <input type="number" id="val-roe-min" value="8" min="0" max="50" step="1" style="width:80px" />
+        </div>
+        <div>
+          <label class="inline-label">부채비율 상한 (%)</label>
+          <input type="number" id="val-debt-max" value="150" min="10" max="500" step="10" style="width:90px" />
+        </div>
+        <div>
+          <label class="inline-label">F-Score 최소</label>
+          <select id="val-fscore-min">
+            <option value="3">3점</option>
+            <option value="4" selected>4점</option>
+            <option value="5">5점</option>
+            <option value="6">6점</option>
+          </select>
+        </div>
+        <div>
+          <label class="inline-label">탐색 범위</label>
+          <select id="val-candidate-limit" title="시가총액 상위 몇 종목을 후보로 탐색할지 결정합니다. 넓을수록 결과가 많지만 시간이 오래 걸립니다.">
+            <option value="100">상위 100종목</option>
+            <option value="200" selected>상위 200종목</option>
+            <option value="300">상위 300종목</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="runValueScreener()" style="align-self:flex-end">🔍 스크리닝 실행</button>
+      </div>
+      <div class="status-msg" id="val-status" style="margin-top:10px"></div>
+    </div>
+
+    <!-- 결과 -->
+    <div class="card" id="val-result-card" style="display:none">
+      <div class="flex-row" style="margin-bottom:12px">
+        <div class="card-title" style="margin:0">📋 스크리닝 결과</div>
+        <div id="val-result-meta" style="margin-left:auto;font-size:.85em;color:var(--muted)"></div>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="bt-data-table" id="val-table">
+          <thead>
+            <tr>
+              <th style="text-align:left">종목</th>
+              <th style="text-align:left">시장/섹터</th>
+              <th>PER</th>
+              <th>PBR</th>
+              <th>ROE</th>
+              <th>부채비율</th>
+              <th>영이YoY</th>
+              <th>F-Score</th>
+              <th>가치점수</th>
+            </tr>
+          </thead>
+          <tbody id="val-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- 지표 설명 -->
+      <div style="margin-top:14px">
+        <button class="btn btn-secondary btn-sm" onclick="toggleEl('val-guide')">📖 지표 설명 (초보자용)</button>
+        <div class="toggle-content" id="val-guide">
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:12px;font-size:.85em">
+
+            <!-- PER -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #6366f1">
+              <div style="font-weight:700;margin-bottom:6px">📊 PER — 주가수익비율 <span style="font-weight:400;color:var(--muted)">(낮을수록 저평가)</span></div>
+              <div style="color:var(--muted);line-height:1.7">
+                <strong>"이 회사의 순이익 대비 주가가 얼마나 비싼가?"</strong>를 나타내는 수치입니다.<br>
+                예를 들어 PER 10이면 "지금 순이익 속도로 10년 뒤에 투자금을 회수"한다는 뜻입니다.<br>
+                PER이 <strong>낮을수록</strong> 이익에 비해 주가가 저렴한 것이고,
+                일반적으로 <span style="color:#10b981">10 이하</span>면 저평가,
+                <span style="color:#f59e0b">10~25</span>면 보통,
+                <span style="color:var(--sell)">25 초과</span>면 고평가로 봅니다.
+              </div>
+            </div>
+
+            <!-- PBR -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #8b5cf6">
+              <div style="font-weight:700;margin-bottom:6px">🏦 PBR — 주가순자산비율 <span style="font-weight:400;color:var(--muted)">(낮을수록 안전마진 큼)</span></div>
+              <div style="color:var(--muted);line-height:1.7">
+                <strong>"회사가 지금 당장 문을 닫고 자산을 팔면 주주에게 돌아오는 돈의 몇 배를 주가가 부르고 있나?"</strong>를 나타냅니다.<br>
+                PBR 1.0이면 주가 = 장부 자산가치, 1.0 미만이면 자산보다 싸게 팔리는 것이므로 안전마진이 큽니다.<br>
+                일반적으로 <span style="color:#10b981">1.0 이하</span>면 자산 대비 저평가,
+                <span style="color:#f59e0b">1~3</span>이면 보통,
+                <span style="color:var(--sell)">3 초과</span>면 자산 대비 비쌉니다.
+              </div>
+            </div>
+
+            <!-- ROE -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #10b981">
+              <div style="font-weight:700;margin-bottom:6px">💰 ROE — 자기자본이익률 <span style="font-weight:400;color:var(--muted)">(높을수록 돈을 잘 버는 기업)</span></div>
+              <div style="color:var(--muted);line-height:1.7">
+                <strong>"주주가 맡긴 돈으로 회사가 얼마나 효율적으로 이익을 냈나?"</strong>를 보여줍니다.<br>
+                은행 예금 이자가 약 3~4%인 점을 생각하면, ROE가 최소 8% 이상이어야 주식 투자로서 의미가 있습니다.<br>
+                <span style="color:#10b981">ROE 15% 이상</span>: 매우 우수 — 사업 경쟁력이 높은 기업<br>
+                <span style="color:#f59e0b">ROE 8~15%</span>: 보통 — 안정적 수익<br>
+                <span style="color:var(--sell)">ROE 8% 미만</span>: 이 스크리너의 기본 필터에서 제외됩니다
+              </div>
+            </div>
+
+            <!-- 부채비율 -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #f59e0b">
+              <div style="font-weight:700;margin-bottom:6px">🏋️ 부채비율 <span style="font-weight:400;color:var(--muted)">(낮을수록 재무 안전)</span></div>
+              <div style="color:var(--muted);line-height:1.7">
+                <strong>"내 돈 대비 빚이 얼마나 많은가?"</strong>를 나타냅니다. 100%면 자기 자본 1억에 빚도 1억이라는 뜻입니다.<br>
+                빚이 많으면 경기가 나빠질 때 이자 부담으로 망할 위험이 높아집니다.<br>
+                <span style="color:#10b981">50% 이하</span>: 매우 건전 — 빚이 거의 없는 알짜 기업<br>
+                <span style="color:#f59e0b">50~150%</span>: 보통 — 일반적인 범위<br>
+                <span style="color:var(--sell)">150% 초과</span>: 이 스크리너의 기본 필터에서 제외됩니다<br>
+                <em style="font-size:.9em">※ 은행·증권 같은 금융업은 업종 특성상 부채비율이 높으므로 일반 기업과 단순 비교는 어렵습니다.</em>
+              </div>
+            </div>
+
+            <!-- 영업이익 YoY -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #06b6d4">
+              <div style="font-weight:700;margin-bottom:6px">📈 영이YoY — 영업이익 전년 대비 성장률 <span style="font-weight:400;color:var(--muted)">(+ 면 실적 개선)</span></div>
+              <div style="color:var(--muted);line-height:1.7">
+                <strong>"지난해보다 본업으로 돈을 얼마나 더 벌었나?"</strong>를 보여줍니다.<br>
+                영업이익이란 물건 팔아서 남은 이익(이자·세금 빼기 전)으로, 회사의 핵심 경쟁력을 반영합니다.<br>
+                <span style="color:#10b981">+20% 이상</span>: 실적 고성장 — 사업이 빠르게 좋아지는 중<br>
+                <span style="color:#f59e0b">0~+20%</span>: 안정 성장<br>
+                <span style="color:var(--sell)">마이너스(−)</span>: 실적 악화 — 가치함정(싸 보이지만 실제론 사업이 나빠지는 경우) 위험 신호
+              </div>
+            </div>
+
+            <!-- F-Score -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #ec4899">
+              <div style="font-weight:700;margin-bottom:8px">🏅 Piotroski F-Score (0~9점) — 재무 종합 건강진단</div>
+              <div style="color:var(--muted);line-height:1.7;margin-bottom:10px">
+                미국 스탠퍼드 교수 조셉 피오트로스키가 개발한 9개 항목 재무 체크리스트입니다.<br>
+                각 항목이 건강하면 1점, 아니면 0점으로, <strong>9개 항목 합산(0~9점)</strong>을 냅니다.
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:10px">
+                <div style="background:rgba(16,185,129,.08);border-radius:6px;padding:10px 12px">
+                  <div style="font-weight:600;color:#10b981;margin-bottom:4px">수익성 (3점)</div>
+                  <div style="color:var(--muted);font-size:.92em;line-height:1.5">
+                    ✔ 영업이익이 흑자인가?<br>
+                    ✔ ROE(자본이익률)가 양수인가?<br>
+                    ✔ ROE가 작년보다 올랐는가?
+                  </div>
+                </div>
+                <div style="background:rgba(99,102,241,.08);border-radius:6px;padding:10px 12px">
+                  <div style="font-weight:600;color:#6366f1;margin-bottom:4px">안전성 (3점)</div>
+                  <div style="color:var(--muted);font-size:.92em;line-height:1.5">
+                    ✔ 부채비율이 100% 미만인가?<br>
+                    ✔ 부채비율이 작년보다 낮아졌나?<br>
+                    ✔ 배당을 지급한 이력이 있는가?
+                  </div>
+                </div>
+                <div style="background:rgba(245,158,11,.08);border-radius:6px;padding:10px 12px">
+                  <div style="font-weight:600;color:#f59e0b;margin-bottom:4px">성장성 (3점)</div>
+                  <div style="color:var(--muted);font-size:.92em;line-height:1.5">
+                    ✔ 영업이익이 흑자인가? (재확인)<br>
+                    ✔ 영업이익이 작년보다 늘었는가?<br>
+                    ✔ 매출이 크게 줄지 않았나?(−5% 이내)
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;gap:10px;font-size:.88em">
+                <span style="background:rgba(16,185,129,.15);color:#10b981;padding:3px 10px;border-radius:12px;font-weight:600">7~9점: 재무 우수</span>
+                <span style="background:rgba(245,158,11,.15);color:#f59e0b;padding:3px 10px;border-radius:12px;font-weight:600">4~6점: 보통</span>
+                <span style="background:rgba(239,68,68,.15);color:var(--sell);padding:3px 10px;border-radius:12px;font-weight:600">0~3점: 주의</span>
+              </div>
+            </div>
+
+            <!-- 가치점수 -->
+            <div style="background:var(--bg-dark);border-radius:10px;padding:14px 16px;border-left:4px solid #a855f7">
+              <div style="font-weight:700;margin-bottom:6px">⭐ 가치점수 (0~100점) — 이 시스템의 종합 평가 점수</div>
+              <div style="color:var(--muted);line-height:1.7">
+                위의 5가지 지표를 종합해서 <strong>100점 만점</strong>으로 환산한 점수입니다.<br>
+                점수가 높을수록 저평가 + 재무 건전 + 성장 가능성이 높은 가치주임을 의미합니다.
+              </div>
+              <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px;font-size:.83em;color:var(--muted)">
+                <span>· PER 점수 25pt — 동종업종 대비 PER이 낮을수록 높은 점수</span>
+                <span>· PBR 점수 20pt — PBR 0에 가까울수록 만점</span>
+                <span>· ROE 점수 20pt — ROE 20% 기준으로 비례 부여 (20% 이상이면 만점)</span>
+                <span>· 부채 점수 20pt — 부채비율 0%에 가까울수록 만점, 200% 이상이면 0점</span>
+                <span>· 성장 점수 15pt — 영업이익 YoY 30% 이상이면 만점</span>
+              </div>
+            </div>
+
+          </div><!-- /지표 카드들 -->
+
+          <div style="margin-top:14px;padding:10px 14px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:8px;font-size:.8em;color:var(--muted);line-height:1.6">
+            ⚠️ <strong>주의사항:</strong>
+            이 스크리너는 <strong>중기(3~6개월) 관점</strong>의 가치 발굴용입니다. 단기(1~2주) AI 추천 탭과 목적이 다릅니다.<br>
+            데이터 출처: 네이버 금융(PER·PBR) + DART 공시 재무제표(ROE·부채비율·YoY). 일부 기업은 보고서 미제출로 지표가 누락될 수 있습니다.<br>
+            <strong>과거 재무 데이터 기반이므로 미래 수익을 보장하지 않습니다. 최종 투자 결정은 반드시 본인이 추가 확인 후 판단하세요.</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /tab-value -->
 
 </div><!-- /main -->
 

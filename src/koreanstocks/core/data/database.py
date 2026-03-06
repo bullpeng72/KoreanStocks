@@ -144,21 +144,32 @@ class DatabaseManager:
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     code         TEXT NOT NULL,
                     session_date DATE NOT NULL,
-                    action       TEXT NOT NULL,       -- BUY / SELL / HOLD
-                    entry_price  REAL NOT NULL,       -- 추천일 종가 (진입가)
-                    target_price REAL,                -- AI 목표가
-                    price_5d     REAL,                -- 5거래일 후 종가
-                    return_5d    REAL,                -- 5거래일 수익률 (%)
-                    correct_5d   INTEGER,             -- 1=정답 0=오답
+                    action       TEXT NOT NULL,
+                    entry_price  REAL NOT NULL,
+                    target_price REAL,
+                    price_5d     REAL,
+                    return_5d    REAL,
+                    correct_5d   INTEGER,
                     price_10d    REAL,
                     return_10d   REAL,
                     correct_10d  INTEGER,
                     price_20d    REAL,
                     return_20d   REAL,
                     correct_20d  INTEGER,
-                    target_hit   INTEGER,             -- 20거래일 이내 목표가 달성 여부
+                    target_hit   INTEGER,
                     updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(code, session_date)
+                )
+            ''')
+
+            # 9. 펀더멘털 캐시 테이블 (가치주 스크리너용, 당일 유효)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fundamental_cache (
+                    code        TEXT NOT NULL,
+                    cache_date  TEXT NOT NULL,
+                    data_json   TEXT NOT NULL,
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (code, cache_date)
                 )
             ''')
 

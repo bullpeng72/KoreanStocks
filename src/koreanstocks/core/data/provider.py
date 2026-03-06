@@ -608,6 +608,133 @@ class StockDataProvider:
         )
         return combined[:limit]
 
+    def get_value_candidates(
+        self,
+        limit: int = 200,
+        market: str = "ALL",
+        per_max: float = 30.0,
+        roe_min: float = 5.0,
+    ) -> List[str]:
+        """시가총액 상위 종목에서 PER/ROE 사전 필터를 거쳐 가치주 후보 반환.
+
+        네이버 금융 시가총액 순위(sise_market_sum.naver)에서 PER·ROE 컬럼을 파싱해
+        1차 필터링 후 코드 목록을 반환한다. DART 호출 전 사전 선별로 효율 개선.
+
+        Args:
+            limit: 반환 종목 수 (필터 통과 기준, 시가총액 순)
+            market: ALL | KOSPI | KOSDAQ
+            per_max: PER 상한 (0 이하 = 적자 제외)
+            roe_min: ROE 하한 (%)
+        """
+        import re
+        import concurrent.futures as _cf
+        from bs4 import BeautifulSoup
+
+        _headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        sosok_list = [0, 1] if market == "ALL" else ([0] if market == "KOSPI" else [1])
+
+        def _last_page(sosok: int) -> int:
+            try:
+                r = requests.get(
+                    "https://finance.naver.com/sise/sise_market_sum.naver",
+                    params={"sosok": str(sosok), "page": "1"},
+                    headers=_headers, timeout=10,
+                )
+                soup = BeautifulSoup(r.text, "html.parser")
+                pager = soup.select(".pgRR a")
+                if pager:
+                    m = re.search(r"page=(\d+)", pager[-1]["href"])
+                    if m:
+                        return int(m.group(1))
+            except Exception:
+                pass
+            return 50
+
+        def _fetch_page(sosok: int, page: int):
+            try:
+                r = requests.get(
+                    "https://finance.naver.com/sise/sise_market_sum.naver",
+                    params={"sosok": str(sosok), "page": str(page)},
+                    headers=_headers, timeout=10,
+                )
+                soup = BeautifulSoup(r.text, "html.parser")
+                table = soup.select_one("table.type_2")
+                if not table:
+                    return []
+                # 헤더에서 PER·ROE 컬럼 인덱스 탐지
+                ths = table.select("thead th")
+                per_idx, roe_idx = None, None
+                for i, th in enumerate(ths):
+                    txt = th.get_text(strip=True)
+                    if txt == "PER":
+                        per_idx = i
+                    elif txt == "ROE":
+                        roe_idx = i
+                rows = []
+                for tr in table.select("tbody tr"):
+                    a = tr.select_one("td a[href*='code=']")
+                    if not a:
+                        continue
+                    code = a["href"].split("code=")[-1].strip()
+                    tds = tr.select("td")
+                    per, roe = None, None
+                    try:
+                        if per_idx is not None and per_idx < len(tds):
+                            per = float(tds[per_idx].get_text(strip=True).replace(",", "") or "nan")
+                        if roe_idx is not None and roe_idx < len(tds):
+                            roe = float(tds[roe_idx].get_text(strip=True).replace(",", "") or "nan")
+                    except ValueError:
+                        pass
+                    rows.append({"code": code, "per": per, "roe": roe})
+                return rows
+            except Exception:
+                return []
+
+        try:
+            full_stock_list = self.get_stock_list()
+            if market != "ALL":
+                valid_codes = set(full_stock_list[full_stock_list["market"] == market]["code"].tolist())
+            else:
+                valid_codes = set(full_stock_list["code"].tolist())
+
+            # 페이지 수 파악 후 병렬 수집
+            tasks = []
+            for sosok in sosok_list:
+                n = _last_page(sosok)
+                tasks += [(sosok, p) for p in range(1, n + 1)]
+
+            all_rows: List[dict] = []
+            with _cf.ThreadPoolExecutor(max_workers=20) as ex:
+                futures = {ex.submit(_fetch_page, s, p): (s, p) for s, p in tasks}
+                for f in _cf.as_completed(futures):
+                    all_rows.extend(f.result())
+
+            # 시가총액 순서 유지 (페이지 순서) + PER/ROE 필터
+            seen: set = set()
+            result: List[str] = []
+            for row in all_rows:
+                code = row["code"]
+                if code in seen or code not in valid_codes:
+                    continue
+                seen.add(code)
+                per = row["per"]
+                roe = row["roe"]
+                import math
+                if per is not None and not math.isnan(per) and (per <= 0 or per > per_max):
+                    continue
+                if roe is not None and not math.isnan(roe) and roe < roe_min:
+                    continue
+                result.append(code)
+                if len(result) >= limit:
+                    break
+
+            logger.info(f"[VALUE 후보] 사전 필터 통과: {len(result)}개 (PER≤{per_max}, ROE≥{roe_min}%)")
+            return result
+
+        except Exception as e:
+            logger.error(f"get_value_candidates 실패, get_market_ranking 폴백: {e}")
+            return self.get_market_ranking(limit=limit, market=market)
+
     def get_market_buckets(self, market: str = 'ALL') -> Dict[str, List[str]]:
         """거래량·모멘텀·반등 3개 버킷으로 후보군 분류.
 

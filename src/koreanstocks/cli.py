@@ -531,6 +531,65 @@ def outcomes(
 
 
 @app.command()
+def value(
+    market: str = typer.Option("ALL", help="시장 필터: ALL | KOSPI | KOSDAQ"),
+    limit: int = typer.Option(20, help="최종 출력 종목 수"),
+    per_max: float = typer.Option(25.0, help="PER 상한"),
+    pbr_max: float = typer.Option(3.0,  help="PBR 상한"),
+    roe_min: float = typer.Option(8.0,  help="ROE 하한 (%)"),
+    debt_max: float = typer.Option(150.0, help="부채비율 상한 (%)"),
+    f_score_min: int = typer.Option(4, help="Piotroski F-Score 최소값 (0~9)"),
+):
+    """
+    [bold]가치주 스크리닝[/bold] — 중기(3~6개월) 관점 펀더멘털 분석
+
+    저PER·저PBR·고ROE·안전한 재무구조를 갖춘 종목을
+    Piotroski F-Score와 가치 점수(0~100)로 정렬합니다.
+
+    [bold]필터 기준:[/bold]
+    [dim]  영업이익 흑자 / PER·PBR 상한 / ROE·부채비율 / 매출 역성장 방어[/dim]
+
+    [bold]예시:[/bold]
+    [dim]  koreanstocks value[/dim]
+    [dim]  koreanstocks value --market KOSPI --limit 10[/dim]
+    [dim]  koreanstocks value --per-max 15 --roe-min 12 --f-score-min 5[/dim]
+    """
+    from koreanstocks.core.engine.value_screener import value_screener
+
+    typer.echo(f"가치주 스크리닝 시작 (market={market}, limit={limit})...")
+    results = value_screener.screen(
+        market=market,
+        per_max=per_max,
+        pbr_max=pbr_max,
+        roe_min=roe_min,
+        debt_max=debt_max,
+        f_score_min=f_score_min,
+        limit=limit,
+    )
+
+    if not results:
+        typer.echo("필터 통과 종목이 없습니다. 기준을 완화해 보세요.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"\n{'종목':<12} {'PER':>6} {'PBR':>6} {'ROE':>6} {'부채':>6} {'영이YoY':>8} {'F점':>4} {'가치점':>6}")
+    typer.echo("─" * 62)
+    for r in results:
+        def _f(v, fmt=".1f"):
+            return f"{v:{fmt}}" if v is not None else "  -"
+        typer.echo(
+            f"{r['name']:<12}"
+            f" {_f(r['per']):>6}"
+            f" {_f(r['pbr']):>6}"
+            f" {_f(r['roe']):>5}%"
+            f" {_f(r['debt_ratio']):>5}%"
+            f" {_f(r['op_income_yoy']):>7}%"
+            f" {r['f_score']:>4}/9"
+            f" {r['value_score']:>6}"
+        )
+    typer.echo(f"\n총 {len(results)}종목 선정 (F-Score·가치점수 복합 정렬)")
+
+
+@app.command()
 def home(
     open_dir: bool = typer.Option(False, "--open", "-o", help="파일 탐색기로 홈 디렉토리 열기"),
     setup: bool = typer.Option(False, "--setup", "-s", help="셸 alias 스니펫 출력"),

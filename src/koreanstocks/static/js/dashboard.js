@@ -99,6 +99,10 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
       loadModelHealth();
       modelHealthLoaded = true;
     }
+    if (btn.dataset.tab === "value" && !_valueLoaded) {
+      loadValueDefaults();
+      _valueLoaded = true;
+    }
   });
 });
 
@@ -1598,6 +1602,89 @@ function renderComponentReliability(ens, formula) {
     </div>`;
   wrap.appendChild(formulaDiv);
   return wrap;
+}
+
+// ═══════════════════════════════════════════════════════
+// Tab 7 — 가치주 스크리너
+// ═══════════════════════════════════════════════════════
+
+let _valueLoaded = false;
+
+async function loadValueDefaults() {
+  try {
+    const d = await api("/api/value_stocks/filters");
+    if (d.per_max  != null) document.getElementById("val-per-max").value  = d.per_max;
+    if (d.pbr_max  != null) document.getElementById("val-pbr-max").value  = d.pbr_max;
+    if (d.roe_min  != null) document.getElementById("val-roe-min").value  = d.roe_min;
+    if (d.debt_max != null) document.getElementById("val-debt-max").value = d.debt_max;
+    if (d.f_score_min != null) {
+      const sel = document.getElementById("val-fscore-min");
+      if (sel) sel.value = String(d.f_score_min);
+    }
+  } catch (e) { /* 기본값 유지 */ }
+}
+
+async function runValueScreener() {
+  const market         = document.getElementById("val-market").value;
+  const perMax         = document.getElementById("val-per-max").value;
+  const pbrMax         = document.getElementById("val-pbr-max").value;
+  const roeMin         = document.getElementById("val-roe-min").value;
+  const debtMax        = document.getElementById("val-debt-max").value;
+  const fMin           = document.getElementById("val-fscore-min").value;
+  const candidateLimit = document.getElementById("val-candidate-limit").value;
+
+  setStatus("val-status", `⏳ 스크리닝 중… 시가총액 상위 ${candidateLimit}종목 펀더멘털 수집 + 필터링 (${candidateLimit > 200 ? "2~3분" : "1~2분"} 소요)`);
+
+  const card = document.getElementById("val-result-card");
+  const tbody = document.getElementById("val-tbody");
+  card.style.display = "none";
+  tbody.innerHTML = "";
+
+  const params = new URLSearchParams({
+    market, per_max: perMax, pbr_max: pbrMax, roe_min: roeMin,
+    debt_max: debtMax, f_score_min: fMin, candidate_limit: candidateLimit,
+  });
+
+  try {
+    const data = await api(`/api/value_stocks?${params}`);
+    const stocks = data.stocks || [];
+    setStatus("val-status", "");
+
+    if (!stocks.length) {
+      setStatus("val-status", `필터 조건을 통과한 종목이 없습니다. 임계값을 완화해 보세요.`, true);
+      return;
+    }
+
+    document.getElementById("val-result-meta").textContent =
+      `${stocks.length}개 종목 (F-Score · 가치점수 복합 정렬)`;
+
+    tbody.innerHTML = stocks.map(s => {
+      const fScore = s.f_score ?? 0;
+      const fColor = fScore >= 7 ? "var(--buy)" : fScore >= 4 ? "var(--hold)" : "var(--sell)";
+      const vScore = s.value_score ?? 0;
+      const vColor = vScore >= 70 ? "var(--buy)" : vScore >= 50 ? "var(--hold)" : "var(--sell)";
+      const yoy    = s.op_income_yoy;
+      const yoyTxt = yoy == null ? "—" : (yoy >= 0 ? `+${yoy.toFixed(1)}%` : `${yoy.toFixed(1)}%`);
+      const yoyCls = yoy == null ? "" : yoy >= 0 ? "pos" : "neg";
+      const sector = [s.market, s.sector].filter(Boolean).join(" · ");
+      return `<tr>
+        <td><strong>${s.name || s.code}</strong>
+            <span style="font-size:.76em;color:var(--muted);margin-left:4px">${s.code}</span></td>
+        <td style="font-size:.8em;color:var(--muted)">${sector || "—"}</td>
+        <td style="text-align:right">${s.per != null ? s.per.toFixed(1) + "x" : "—"}</td>
+        <td style="text-align:right">${s.pbr != null ? s.pbr.toFixed(2) + "x" : "—"}</td>
+        <td style="text-align:right;color:var(--buy)">${s.roe != null ? s.roe.toFixed(1) + "%" : "—"}</td>
+        <td style="text-align:right">${s.debt_ratio != null ? s.debt_ratio.toFixed(1) + "%" : "—"}</td>
+        <td class="${yoyCls}" style="text-align:right">${yoyTxt}</td>
+        <td style="text-align:right;color:${fColor};font-weight:700">${fScore}/9</td>
+        <td style="text-align:right;color:${vColor};font-weight:700">${vScore.toFixed(1)}</td>
+      </tr>`;
+    }).join("");
+
+    card.style.display = "";
+  } catch (e) {
+    setStatus("val-status", `오류: ${e.message}`, true);
+  }
 }
 
 // ═══════════════════════════════════════════════════════
