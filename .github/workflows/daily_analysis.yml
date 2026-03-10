@@ -107,6 +107,10 @@ jobs:
           retention-days: 90
           overwrite: true
 
+      - name: Remove watchlist before push (개인 데이터 제거)
+        if: steps.check_trading_day.outputs.is_trading_day == 'true'
+        run: sqlite3 data/storage/stock_analysis.db "DELETE FROM watchlist;"
+
       - name: Commit updated DB to repository
         if: steps.check_trading_day.outputs.is_trading_day == 'true'
         run: |
