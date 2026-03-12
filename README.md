@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.4.4-blue)
+![version](https://img.shields.io/badge/version-0.4.5-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -527,8 +527,20 @@ koreanstocks serve   # http://localhost:8000/dashboard 자동 열림
 
 ```bash
 pip install pipx && pipx ensurepath
-pipx install koreanstocks
+pipx install koreanstocks          # 기본 설치 (TCN 비활성화)
 ```
+
+TCN 딥러닝 앙상블을 활성화하려면 (선택적, ~700MB):
+
+```bash
+# 방법 A: 처음부터 dl extra 포함 설치
+pipx install "koreanstocks[dl]"
+
+# 방법 B: 이미 설치한 경우 inject
+pipx inject koreanstocks torch
+```
+
+> **주의**: pipx는 격리 venv를 사용하므로 `pip install koreanstocks[dl]`로는 TCN을 활성화할 수 없습니다. 반드시 위 pipx 방식을 사용하세요.
 
 ---
 
@@ -769,6 +781,14 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.4.5 (2026-03-12) — PyPI 배포 안전성 강화 · pipx TCN 활성화 안내 · 패키지 구조 개선
+
+- 🔧 `pyproject.toml`: `torch>=2.0` → `torch>=2.4` — Python 3.11/3.12/3.13 공식 지원 최초 버전으로 `[dl]` extra 하한선 명확화
+- ✨ pipx 사용자를 위한 TCN 활성화 방법 추가 (`pipx install "koreanstocks[dl]"` / `pipx inject`) + 격리 venv 주의사항
+- 🔧 `core/` 하위 `__init__.py` 4개 추가 — namespace package → 명시적 regular package 전환 (wheel 호환성 향상)
+- 🐛 `tests/compat_check.py`: `pykrx` 제거, `lightgbm`·`catboost` 추가, `torch` 선택적 체크 추가
+- 🐛 `README_PYPI.md`: `-/.koreanstocks/` → `~/.koreanstocks/` 오타 수정
 
 ### v0.4.4 (2026-03-11) — TCN 딥러닝 앙상블 추가 · 과적합 억제 · 추천 성과 UI 개선
 

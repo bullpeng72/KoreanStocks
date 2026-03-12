@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "koreanstocks"
-version = "0.4.4"
+version = "0.4.5"
 description = "KOSPI·KOSDAQ 종목 자동 스크리닝 + AI/ML 분석 + 텔레그램 리포트 플랫폼"
 # PyPI용 README (mermaid 제거 버전). GitHub 표시용은 README.md 를 사용.
 readme = {file = "README_PYPI.md", content-type = "text/markdown; charset=UTF-8"}
@@ -64,7 +64,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dl = [
-    "torch>=2.0",   # TCN 딥러닝 앙상블 (선택적, 미설치 시 TCN 비활성화)
+    "torch>=2.4",   # TCN 딥러닝 앙상블 (선택적, 미설치 시 TCN 비활성화)
+                    # torch 2.4+: Python 3.11 / 3.12 / 3.13 공식 지원 최초 버전
 ]
 dev = [
     "pytest>=8",

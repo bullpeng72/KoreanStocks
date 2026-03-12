@@ -34,12 +34,19 @@ def _import(name):
 for pkg in [
     "fastapi", "uvicorn", "typer",
     "openai", "pandas", "sklearn", "xgboost",
-    "pykrx", "ta", "plotly", "numpy",
+    "lightgbm", "catboost", "ta", "plotly", "numpy",
     "scipy", "joblib", "bs4", "schedule",
     "matplotlib", "httpx", "dotenv",
     "requests", "FinanceDataReader",
 ]:
     check(f"import {pkg}", _import(pkg))
+
+# torch는 선택적 의존성 ([dl] extra) — 미설치 시 경고만 (FAIL 아님)
+try:
+    import torch as _torch
+    results.append(("import torch [dl]", OK, f"v{_torch.__version__} (TCN 활성화)"))
+except ImportError:
+    results.append(("import torch [dl]", WARN, "미설치 — TCN 비활성화 (pipx inject koreanstocks torch 로 활성화)"))
 
 # ── 2. koreanstocks 패키지 자체 ────────────────────────────────────
 check("import koreanstocks", lambda: importlib.import_module("koreanstocks").__version__ if hasattr(importlib.import_module("koreanstocks"), "__version__") else "ok")

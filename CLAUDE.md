@@ -1,4 +1,4 @@
-# Korean Stocks AI/ML Analysis System `v0.4.4`
+# Korean Stocks AI/ML Analysis System `v0.4.5`
 
 KOSPI·KOSDAQ 종목을 기술적 지표, 머신러닝, 뉴스 감성 분석으로 자동 스크리닝하고 텔레그램 리포트를 발송하는 투자 보조 플랫폼.
 
@@ -208,6 +208,14 @@ DB_PATH=data/storage/stock_analysis.db
 - GitHub Actions 스케줄 변경
 
 ## 📝 변경 이력
+
+### v0.4.5 (2026-03-12) — PyPI 배포 안전성 강화 · pipx TCN 활성화 안내 · 패키지 구조 개선
+
+- 🔧 `pyproject.toml`: `torch>=2.0` → `torch>=2.4` — Python 3.11/3.12/3.13 공식 지원 최초 버전으로 `[dl]` extra 하한선 명확화
+- ✨ `README.md` / `README_PYPI.md`: pipx 사용자를 위한 TCN 활성화 방법 추가 (`pipx install "koreanstocks[dl]"` / `pipx inject koreanstocks torch`) + 격리 venv 주의사항
+- 🔧 `src/koreanstocks/core/` 하위 `__init__.py` 4개 신규 추가 — namespace package → 명시적 regular package 전환 (wheel 호환성 향상)
+- 🐛 `tests/compat_check.py`: 제거된 `pykrx` 항목 삭제, `lightgbm`·`catboost` 추가, `torch` 선택적 체크 추가 (미설치 시 ⚠️ WARN, FAIL 아님)
+- 🐛 `README_PYPI.md`: `-/.koreanstocks/` → `~/.koreanstocks/` 오타 수정
 
 ### v0.4.4 (2026-03-11) — TCN 딥러닝 앙상블 추가 · 과적합 억제 · 추천 성과 UI 개선
 
