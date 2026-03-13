@@ -2013,98 +2013,139 @@ function renderEnsembleSummary(ens) {
 
 function _buildImprovements(models, ensemble) {
   /* 모델 데이터를 분석해 우선순위별 향상 방안 배열 반환.
-     각 항목: { level: "high"|"medium"|"low", title, desc, action } */
+     각 항목: { level, title, why, desc, action } */
   const items = [];
   const treeModels = models.filter(m => m.name !== "tcn");
-  const tcn        = models.find(m => m.name === "tcn");
 
-  // 1. 트리 모델 개별 과적합 갭 점검
-  treeModels.forEach(m => {
-    if (m.overfit_gap > 0.10) {
-      items.push({
-        level: "high",
-        title: `${m.label} 과적합 갭 초과`,
-        desc:  `현재 갭 ${m.overfit_gap.toFixed(4)} > 임계 0.10`,
-        action: m.name === "random_forest"
-          ? "max_depth 추가 축소(3) 또는 ExtraTreesClassifier 교체 검토"
-          : "정규화 파라미터 강화 후 재학습",
-      });
-    }
-  });
-
-  // 2. 레짐 갭 (test_auc - cv_auc 평균 괴리)
-  if (ensemble.mean_regime_gap > 0.10) {
-    items.push({
-      level: "high",
-      title: "레짐 갭 과다",
-      desc:  `test AUC vs CV AUC 평균 갭 ${ensemble.mean_regime_gap.toFixed(4)} > 0.10 — 특정 시장 레짐 편향 가능성`,
-      action: "Walk-Forward CV 윈도우 확장 또는 레짐 인식 피처(VIX 레짐 원-핫 등) 추가",
-    });
-  } else if (ensemble.mean_regime_gap > 0.07) {
-    items.push({
-      level: "medium",
-      title: "레짐 갭 주의",
-      desc:  `테스트 기간 레짐 편향 가능성 (갭 ${ensemble.mean_regime_gap.toFixed(4)})`,
-      action: "학습 기간 2y → 3y 확장으로 다양한 시장 레짐 커버",
-    });
-  }
-
-  // 3. CV AUC 불안정 (std > 0.05)
-  treeModels.forEach(m => {
-    if (m.cv_auc_std != null && m.cv_auc_std > 0.05) {
-      items.push({
-        level: "medium",
-        title: `${m.label} CV 불안정`,
-        desc:  `CV AUC std ${m.cv_auc_std.toFixed(4)} > 0.05 — fold 간 성능 편차 큼`,
-        action: "정규화 강화 또는 Walk-Forward fold 수 축소로 안정성 개선",
-      });
-    }
-  });
-
-  // 4. 재학습 권고 (30일 초과)
+  // ── 1. 재학습 경과일 ──────────────────────────────────────────────────────
   if (ensemble.days_since_training > 30) {
     items.push({
       level: "high",
       title: "재학습 필요",
+      why:   "주가·거시 데이터는 매일 갱신되며, 시장 구조는 수주 단위로 변한다. 30일 이상 된 모델은 최신 패턴을 반영하지 못해 예측 신호 품질이 떨어진다.",
       desc:  `마지막 학습 ${ensemble.days_since_training}일 경과 (권장: 30일 이내)`,
-      action: "koreanstocks train 실행 — 최신 시장 데이터로 재학습",
+      action: "koreanstocks train — 최신 2년치 데이터로 전 모델 재학습",
     });
   } else if (ensemble.days_since_training > 14) {
     items.push({
       level: "medium",
       title: "재학습 권장",
+      why:   "14일 이상 경과 시 레짐 갭이 서서히 증가한다. 월 2회 재학습이 성능 유지의 현실적 기준이다.",
       desc:  `마지막 학습 ${ensemble.days_since_training}일 경과 (권장: 14일 이내)`,
-      action: "koreanstocks train 실행",
+      action: "koreanstocks train",
     });
   }
 
-  // 5. 평균 Test AUC 낮음
-  if (ensemble.mean_test_auc < 0.58) {
+  // ── 2. 트리 모델 과적합 갭 ─────────────────────────────────────────────────
+  const rfModel = models.find(m => m.name === "random_forest");
+  treeModels.forEach(m => {
+    if (m.overfit_gap > 0.10) {
+      let actionText;
+      if (m.name === "random_forest") {
+        actionText = "trainer.py RF 파라미터: max_depth 추가 축소(4→3) 또는 max_samples 0.8→0.7 강화 후 재학습. 효과 미미 시 ExtraTreesClassifier 교체 검토.";
+      } else if (m.name === "gradient_boosting") {
+        actionText = "trainer.py GB: max_depth 2→1 또는 min_samples_leaf 25→40, subsample 0.7→0.6 강화 후 재학습.";
+      } else if (m.name === "catboost") {
+        actionText = "trainer.py CB: depth 3→2 또는 l2_leaf_reg 5→10 강화 후 재학습.";
+      } else {
+        actionText = "해당 모델 정규화 파라미터 강화 후 재학습.";
+      }
+      items.push({
+        level: "high",
+        title: `${m.label} 과적합 갭 초과`,
+        why:   "훈련 데이터에 과도하게 맞춰져 새 데이터에 일반화가 안 된다는 신호다. 갭이 클수록 실전 성능이 학습 시 측정값보다 낮을 가능성이 높다.",
+        desc:  `과적합 갭 ${m.overfit_gap.toFixed(4)} > 임계 0.10 (train AUC ${m.train_auc != null ? m.train_auc.toFixed(4) : "—"} → test AUC ${m.test_auc != null ? m.test_auc.toFixed(4) : "—"})`,
+        action: actionText,
+      });
+    }
+  });
+
+  // ── 3. 레짐 갭 (test_auc - cv_auc 편향) ──────────────────────────────────
+  if (ensemble.mean_regime_gap > 0.10) {
+    items.push({
+      level: "high",
+      title: "레짐 갭 과다 — 시장 편향 위험",
+      why:   "test AUC가 CV AUC 평균보다 크게 높다는 것은 테스트 기간(최근 몇 달)이 모델에 유리한 특정 시장 국면임을 의미한다. 시장이 전환되면 성능이 급락할 수 있다.",
+      desc:  `레짐 갭 ${ensemble.mean_regime_gap.toFixed(4)} > 0.10 (test_auc − cv_auc_mean 평균)`,
+      action: "① 학습 기간 2y→3y 확장(trainer.py period 파라미터)으로 다양한 레짐 커버 ② 거시 레짐 인식 피처 추가(VIX 레짐 원-핫, 이동평균 크로스오버 상태)",
+    });
+  } else if (ensemble.mean_regime_gap > 0.07) {
+    items.push({
+      level: "medium",
+      title: "레짐 갭 주의",
+      why:   "테스트 기간 시장 구조가 과거 CV 기간과 다를 수 있다. 당장 문제는 아니나 시장 전환 시 성능 하락 리스크가 내재한다.",
+      desc:  `레짐 갭 ${ensemble.mean_regime_gap.toFixed(4)} (주의 임계 0.07)`,
+      action: "학습 기간 2y→3y 확장으로 다양한 시장 레짐 학습 — 재학습 주기 14일 이내 단축 권장",
+    });
+  }
+
+  // ── 4. CV AUC 불안정 (std > 0.05, 트리 모델) ─────────────────────────────
+  treeModels.forEach(m => {
+    if (m.cv_auc_std != null && m.cv_auc_std > 0.05) {
+      items.push({
+        level: "medium",
+        title: `${m.label} CV 성능 불안정`,
+        why:   "Walk-Forward fold 간 AUC 편차가 크다는 것은 모델 성능이 학습 기간에 따라 크게 달라짐을 뜻한다. 이는 특정 시장 레짐에만 의존하는 피처가 있거나 정규화가 부족한 신호다.",
+        desc:  `CV AUC std ${m.cv_auc_std.toFixed(4)} > 0.05 — fold 간 성능 편차 큼`,
+        action: `① ${m.label} min_samples_leaf 증가(현재 대비 +10~20)로 노이즈 피처 의존도 감소 ② 학습 기간 2y→3y 확장으로 fold별 데이터 분포 안정화`,
+      });
+    }
+  });
+
+  // ── 5. 평균 Test AUC ──────────────────────────────────────────────────────
+  if (ensemble.mean_test_auc < 0.57) {
+    items.push({
+      level: "high",
+      title: "앙상블 AUC 부족",
+      why:   "AUC 0.57 미만은 종목 선별 신호가 랜덤 수준에 가깝다는 뜻이다. 이 상태에서의 추천은 신뢰도가 낮아 실질적 투자 참고 가치가 제한된다.",
+      desc:  `평균 Test AUC ${ensemble.mean_test_auc.toFixed(4)} < 0.57`,
+      action: "① 피처 중요도 하위 5개 제거 후 재학습 ② rs_vs_mkt_3m·high/low_52w_ratio 등 상대강도 피처 가중치 확인 ③ 타깃 기간 10→15거래일 변경 실험",
+    });
+  } else if (ensemble.mean_test_auc < 0.58) {
     items.push({
       level: "medium",
       title: "앙상블 AUC 개선 여지",
-      desc:  `평균 Test AUC ${ensemble.mean_test_auc.toFixed(4)} < 0.58`,
-      action: "중요도 하위 피처 제거 후 재학습 — 또는 레짐별 별도 모델 검토",
+      why:   "AUC 0.58 미만 구간은 신호가 약하다. 소폭 개선만으로도 추천 적중률이 체감될 수 있다.",
+      desc:  `평균 Test AUC ${ensemble.mean_test_auc.toFixed(4)} (권장: 0.58 이상)`,
+      action: "피처 중요도 하위 피처 정리 후 재학습 — 레짐별 복합 피처(거시+기술) 추가 검토",
     });
   }
 
-  // 6. TCN 비활성
-  if (!ensemble.tcn_active) {
+  // ── 6. 활성 모델 수 부족 ──────────────────────────────────────────────────
+  if (ensemble.active_count < ensemble.total_model_count) {
+    const missing = ensemble.total_model_count - ensemble.active_count;
+    const isTcnMissing = !ensemble.tcn_active;
     items.push({
-      level: "medium",
-      title: "TCN 비활성",
-      desc:  "PyTorch 미설치로 딥러닝 앙상블 제외됨",
-      action: "pip install 'koreanstocks[dl]' 후 koreanstocks train 재실행",
+      level: isTcnMissing ? "medium" : "high",
+      title: `활성 모델 ${ensemble.active_count}/${ensemble.total_model_count} — 앙상블 불완전`,
+      why:   "모델 수가 적을수록 앙상블 다양성이 줄어 특정 시장 상황에서 오류가 집중된다. 특히 TCN 누락 시 시계열 패턴 보완재가 없어진다.",
+      desc:  `${missing}개 모델 비활성 (품질 미달 또는 미설치)`,
+      action: isTcnMissing
+        ? "TCN: pip install 'koreanstocks[dl]' 후 koreanstocks train 재실행"
+        : "품질 미달 모델의 params.json 확인 → 해당 모델 정규화 조정 후 재학습",
     });
   }
 
-  // 7. 전체 양호 시
+  // ── 7. 품질 미달 모델 ─────────────────────────────────────────────────────
+  if (!ensemble.all_quality_pass) {
+    const failed = models.filter(m => !m.quality_pass).map(m => m.label).join(", ");
+    items.push({
+      level: "high",
+      title: "품질 기준 미달 모델 존재",
+      why:   "AUC < 0.52 모델은 랜덤 분류기보다 나쁠 수 있다. 앙상블에 포함되면 전체 예측 품질을 끌어내린다.",
+      desc:  `품질 미달: ${failed} (AUC < ${ensemble.min_auc_threshold})`,
+      action: "해당 모델 하이퍼파라미터 재검토 후 koreanstocks train 재실행 — 지속 미달 시 _MODEL_CONFIGS에서 해당 모델 제외 검토",
+    });
+  }
+
+  // ── 8. 전체 양호 ─────────────────────────────────────────────────────────
   if (items.length === 0) {
     items.push({
       level: "low",
-      title: "현재 앙상블 상태 양호",
-      desc:  "모든 지표가 권장 범위 이내입니다.",
-      action: "정기 재학습(14~30일 주기)으로 현 상태 유지",
+      title: "앙상블 상태 양호",
+      why:   "모든 지표가 권장 범위 이내입니다.",
+      desc:  `Test AUC ${ensemble.mean_test_auc.toFixed(4)} · 과적합 갭 ${ensemble.mean_overfit_gap.toFixed(4)} · 학습 ${ensemble.days_since_training}일 전`,
+      action: "정기 재학습 주기(14~30일) 유지 — 중기 개선: 학습 기간 3y 확장 및 레짐 피처 보강",
     });
   }
 
@@ -2120,22 +2161,36 @@ function renderImprovementCard(models, ensemble) {
   const levelLabel = { high: "즉시 조치", medium: "권장", low: "양호" };
 
   const card = document.createElement("div");
-  card.style.cssText = "background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px";
+  // 2칸 너비 (그리드에서 span 2)
+  card.style.cssText = "background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:span 2";
 
   const rows = items.map(it => `
-    <div style="margin-bottom:12px;padding:10px;background:var(--bg-dark);border-radius:7px;border-left:3px solid ${levelColor[it.level]}">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+    <div style="margin-bottom:10px;padding:12px;background:var(--bg-dark);border-radius:7px;border-left:3px solid ${levelColor[it.level]}">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
         <span>${levelIcon[it.level]}</span>
-        <span style="font-weight:700;font-size:.85em">${esc(it.title)}</span>
+        <span style="font-weight:700;font-size:.87em">${esc(it.title)}</span>
         <span style="margin-left:auto;font-size:.73em;padding:1px 6px;border-radius:3px;background:${levelColor[it.level]}22;color:${levelColor[it.level]};border:1px solid ${levelColor[it.level]}55">${levelLabel[it.level]}</span>
       </div>
-      <div style="font-size:.78em;color:var(--muted);margin-bottom:4px">${esc(it.desc)}</div>
-      <div style="font-size:.78em;color:var(--text)">▶ ${esc(it.action)}</div>
+      <div style="font-size:.78em;color:var(--muted);margin-bottom:4px;font-style:italic">💡 ${esc(it.why)}</div>
+      <div style="font-size:.78em;color:var(--text);margin-bottom:5px">📊 ${esc(it.desc)}</div>
+      <div style="font-size:.78em;padding:6px 8px;background:var(--bg-card);border-radius:4px;border:1px solid var(--border)">▶ ${esc(it.action)}</div>
     </div>`).join("");
 
+  const highCount   = items.filter(i => i.level === "high").length;
+  const medCount    = items.filter(i => i.level === "medium").length;
+  const summaryColor = highCount > 0 ? "var(--sell)" : medCount > 0 ? "var(--hold)" : "var(--buy)";
+  const summaryText  = highCount > 0
+    ? `즉시 조치 ${highCount}건${medCount > 0 ? ` · 권장 ${medCount}건` : ""}`
+    : medCount > 0 ? `권장 ${medCount}건` : "전체 양호";
+
   card.innerHTML = `
-    <div style="font-weight:700;font-size:.95em;margin-bottom:12px">🎯 신뢰도 향상 방안</div>
-    ${rows}`;
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <div style="font-weight:700;font-size:.95em">🎯 신뢰도 향상 방안</div>
+      <span style="font-size:.78em;padding:2px 8px;border-radius:4px;background:${summaryColor}22;color:${summaryColor};border:1px solid ${summaryColor}55">${summaryText}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px">
+      ${rows}
+    </div>`;
   return card;
 }
 
