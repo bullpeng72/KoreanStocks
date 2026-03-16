@@ -760,34 +760,24 @@ KoreanStocks/
 - ✨ 슬라이더 2행 레이아웃 — 파라미터명 + `기존: N` + 조정값 표기, 카드 내 오버플로 수정
 - ✨ 💾 저장 / 🔄 초기화 즉시 반영 (`POST/DELETE /api/model_params/{name}`)
 
-### v0.5.2 (2026-03-16) — 기술 부채 해소 · 상수 중앙화 · trainer 분해 · 단위 테스트 추가
+### v0.5.2 (2026-03-16) — 기술 부채 해소 · 상수 중앙화 · 단위 테스트 추가
 
-- 🔧 `constants.py`: 레짐 임계값·앙상블 가중치·Softmax 온도·max_workers 상수 추출 (매직넘버 중앙화)
-- 🔧 `provider.py`: `fetch_macro_df()` / `fetch_market_df()` 공유 함수 추출 + `_HEADERS` 모듈 상수화
-- 🔧 `trainer.py`: `train_and_save()` 255줄 → 3개 헬퍼 함수 + ~80줄 오케스트레이터로 분해
-- 🔧 `quality_screener.py`: O(n²) 종목 룩업 → `set_index` O(1) + `calc_roe_avg()` 공유 함수 추출
-- 🔧 `value.py` / `quality.py` 라우터: `Depends()` 패턴 통일 (테스트 인젝션 가능)
-- 🐛 `backtester.py`: Sharpe 계산 시 NaN sync-back 제거 — 표준편차 왜곡 버그 수정
-- 🐛 `features.py` / `prediction_model.py`: `market_df`·`macro_df` 중복 인덱스 방어 코드 추가
-- 🐛 `sync` CLI URL 오타 수정 (`KoreanStock` → `KoreanStocks`)
-- ✨ `tests/test_core.py` 신규: 단위 테스트 29개 추가
+- 🔧 매직넘버 `constants.py` 중앙화, `trainer.py` 분해, `quality_screener.py` O(n²)→O(1) 최적화
+- 🐛 Sharpe 계산 왜곡·중복 인덱스 방어·`sync` URL 오타 수정
+- ✨ `tests/test_core.py` 단위 테스트 29개 추가
 
-### v0.5.1 (2026-03-16) — 모델 파라미터 UI · 신뢰도 권장 파라미터 정확화
+### v0.5.1 (2026-03-16) — 모델 파라미터 API · 신뢰도 향상 방안 카드
 
-- ✨ `models.py` / `dashboard.js`: 모델 파라미터 조회·조정 UI — 학습 파라미터 토글, 오버라이드 저장 (`*_overrides.json`), 재학습 시 자동 병합
-- ✨ `GET/POST/DELETE /api/model_params/{name}` 엔드포인트 — 파라미터 오버라이드 CRUD, 서버 측 범위 검증
-- 🔧 `신뢰도 향상 방안` 카드 — 모델별 실제 파라미터명으로 조치 텍스트 정확화 (XGBoost: `min_child_weight`, LightGBM: `min_child_samples`, CatBoost: `min_data_in_leaf`)
-- 🐛 `dashboard.js`: `innerHTML +=` 반복 시 DOM 재직렬화 버그 → `createElement` + `addEventListener` 방식으로 교체
-- 🐛 `trainer.py`: 학습 루프에 `*_overrides.json` 자동 merge 로직 추가
+- ✨ `GET/POST/DELETE /api/model_params/{name}` — 파라미터 오버라이드 CRUD, 서버 측 범위 검증
+- ✨ 신뢰도 향상 방안 카드 — 모델별 구체적 조치 텍스트 (과적합 갭·레짐 갭·CV 불안정)
+- 🐛 `dashboard.js` DOM 재직렬화 버그 수정, `trainer.py` overrides 자동 merge 추가
 
-### v0.5.0 (2026-03-13) — 거시경제 통합 · MacroNewsAgent · 대시보드 거시 UI · ML 28피처
+### v0.5.0 (2026-03-13) — 거시경제 통합 · ML 28피처
 
-- ✨ `macro_news_agent.py` 신규: 거시 뉴스 감성 분석 + 레짐 감지 (`risk_on` / `uncertain` / `risk_off`)
-- ✨ ML 피처 20개 → 28개 (`vix_change_5d`, `tnx_level`, `tnx_change_1m`, `yield_spread`, `nasdaq_1m`, `gold_1m`, `oil_1m`, `csi300_1m`)
-- ✨ `GET /api/macro_context` 신설 — 레짐·감성·요약 반환
-- ✨ 대시보드 거시경제 UI — 레짐 배너 (Dashboard·AI추천 탭), 레짐 배지, 거시감성 모달 섹션
-- 🔧 종합 점수 3-케이스 확장 (`with_ml_macro: tech×0.35 + ml×0.35 + 종목감성×0.20 + 거시감성×0.10`)
-- 🐛 `trainer._fetch_macro_data()`: 2심볼 → 8심볼 전체 수집 (7개 피처 중요도 0% 버그 해결)
+- ✨ `macro_news_agent.py`: 거시 뉴스 감성 + 레짐 감지 (`risk_on` / `uncertain` / `risk_off`)
+- ✨ ML 피처 20 → 28개 (VIX·금리·나스닥·금·원유·CSI300 추가), 종합 점수 거시감성 10% 반영
+- ✨ `GET /api/macro_context`, 대시보드 레짐 배너·배지 UI 추가
+- 🐛 `trainer._fetch_macro_data()` 2심볼 → 8심볼 (피처 중요도 0% 버그 해결)
 
 ### v0.4.x (2026-03-06 ~ 2026-03-12) — 가치·우량주 스크리너 · TCN 딥러닝 앙상블 · 히트맵 · 안정성 강화
 
