@@ -62,7 +62,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Restore DB from artifacts
         run: gh run download --name stock-database --dir data/storage || echo "No previous DB found, starting fresh"
@@ -74,7 +74,7 @@ jobs:
         run: mkdir -p data/storage
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -132,7 +132,7 @@ jobs:
 
       - name: Save DB as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stock-database
           path: data/storage/stock_analysis.db
