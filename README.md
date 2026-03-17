@@ -731,7 +731,7 @@ flowchart TD
     TRIGGER["⏰ 16:30 KST 평일 자동 실행<br/>(또는 수동 workflow_dispatch)"]
     TRIGGER --> TRADING{"한국 증시 거래일?"}
 
-    TRADING -- 휴장 --> SKIP["📅 텔레그램 휴장일 알림"]
+    TRADING -- 휴장 --> SKIP["📅 분석 건너뜀 (알림 없음)"]
 
     TRADING -- 거래일 --> OUTCOME["지난 추천 성과 기록<br/>5·10·20거래일 후 수익률 집계<br/>→ 텔레그램 성과 리포트"]
     OUTCOME --> STOCKLIST["KOSPI + KOSDAQ 전체 종목 갱신"]
@@ -769,7 +769,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.3"
+│       ├── __init__.py                  # VERSION = "0.5.4"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -799,7 +799,7 @@ KoreanStocks/
 │           │   └── database.py              # SQLite CRUD
 │           ├── engine/
 │           │   ├── indicators.py            # 기술적 지표 계산
-│           │   ├── features.py              # ML 피처 추출 (20개, 공유)
+│           │   ├── features.py              # ML 피처 추출 (28개, 공유)
 │           │   ├── strategy.py              # 전략별 시그널 생성
 │           │   ├── prediction_model.py      # 6-모델 앙상블 추론 (트리 5 + TCN)
 │           │   ├── news_agent.py            # 뉴스 수집 + GPT 감성

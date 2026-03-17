@@ -71,9 +71,9 @@ ML          Scikit-learn (Random Forest, Gradient Boosting) + XGBoost Ranker + L
             → 6-모델 앙상블 (분류기+TCN 75% + 랜커 25%, AUC 기반 Softmax 가중치)
 기술 지표    ta (RSI, MACD, BB, SMA, OBV, ADX, VWAP, CMF, MFI, Stochastic, CCI, ATR, Donchian)
              + finta (SQZMI, VZO, Fisher Transform, Williams Fractal)
-ML 피처     20개 (변동성·추세강도·시장 상대강도·모멘텀·finta·거래량·거시경제·극값감지)
+ML 피처     28개 (변동성·추세강도·시장 상대강도·모멘텀·finta·거래량·거시경제 10개·극값감지)
 데이터       FinanceDataReader, KIND API (KRX 전종목), Naver News API, DART Open API (선택)
-             Yahoo Finance (VIX · S&P500 거시지표)
+             Yahoo Finance (VIX·S&P500·NASDAQ·10Y금리·장단기스프레드·금·유가·CSI300)
 DB          SQLite (data/storage/stock_analysis.db)
 자동화       GitHub Actions (평일 16:30 KST), Telegram Bot API
 시각화       Plotly, Matplotlib, Chart.js (백테스트 차트)
@@ -167,8 +167,11 @@ FinanceDataReader + KIND API (KOSPI · KOSDAQ 전체 종목)
 #### 종합 점수 공식
 
 ```
-ML 모델 활성 시:
-  종합 점수 = Tech × 0.40 + ML × 0.35 + sentiment_norm × 0.25
+ML 모델 활성 + 거시감성 있음:
+  종합 점수 = Tech × 0.35 + ML × 0.35 + 종목감성_norm × 0.20 + 거시감성_norm × 0.10
+
+ML 모델 활성, 거시감성 없음:
+  종합 점수 = Tech × 0.40 + ML × 0.35 + 종목감성_norm × 0.25
 
 ML 모델 없을 시 (폴백):
   종합 점수 = Tech × 0.65 + sentiment_norm × 0.35
@@ -180,7 +183,7 @@ ML 모델 없을 시 (폴백):
 
 ### 2단계 — ML 앙상블 (ml_score, 0-100)
 
-#### 입력 피처 (20개)
+#### 입력 피처 (28개)
 
 | 카테고리 | 피처 |
 |----------|------|
@@ -190,12 +193,12 @@ ML 모델 없을 시 (폴백):
 | finta 지표 | `fisher` · `bullish_fractal_5d` |
 | 거래량·강도 | `mfi` · `vzo` · `obv_trend` · `low_52w_ratio` |
 | 극값감지·반전 | `rsi` · `cci_pct` |
-| 거시경제 | `vix_level` · `sp500_1m` |
+| 거시경제 (10개) | `vix_level` · `vix_change_5d` · `sp500_1m` · `nasdaq_1m` · `tnx_level` · `tnx_change_1m` · `yield_spread` · `gold_1m` · `oil_1m` · `csi300_1m` |
 
 #### 6-모델 앙상블 구조
 
 ```
-20개 피처 입력
+28개 피처 입력
   ├─ Random Forest     (분류기) ─┐
   ├─ Gradient Boosting (분류기)  │
   ├─ LightGBM          (분류기)  ├─► AUC 기반 Softmax 가중치 집계 (75%)
@@ -387,7 +390,7 @@ ML 모델 없을 시 (폴백):
 | **④ 가치주 추천** | PER·PBR·ROE·부채비율·F-Score 필터, value_score 복합 정렬, 탐색 범위 선택 | 중기 3-6개월 |
 | **⑤ 우량주 추천** | ROE·영업이익률·YoY·부채비율 필터, quality_score 정렬, ROE 2개년 지속성 | 장기 6개월+ |
 | **⑥ 백테스트** | RSI / MACD / COMPOSITE 전략 시뮬레이션, 단순보유 비교 차트 | 전략 검증 |
-| **⑦ 모델 신뢰도** | 5모델 AUC · 과적합 갭 · 드리프트 등급 · 피처 중요도 · 재학습 권장 | 신호 신뢰성 판단 |
+| **⑦ 모델 신뢰도** | 6모델 AUC · 과적합 갭 · 드리프트 등급 · 피처 중요도 · 재학습 권장 · 파라미터 슬라이더 조정 | 신호 신뢰성 판단 |
 | **⑧ 설정** | 수동 일일 업데이트 실행, 텔레그램·데이터소스 상태 확인 | 운영 관리 |
 
 ---
@@ -661,7 +664,7 @@ python tests/compat_check.py          # Python 3.11-3.13 호환성 검증
 ```
 ⏰ 16:30 KST 평일 자동 실행 (또는 수동 workflow_dispatch)
   │
-  ├─ 한국 증시 휴장일 → 텔레그램 휴장일 알림 후 종료
+  ├─ 한국 증시 휴장일 → 분석 건너뜀 (알림 없음)
   │
   └─ 거래일 진행:
       1. 지난 추천 성과 기록 (5·10·20거래일 후 수익률 집계)
@@ -703,7 +706,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.3"
+│       ├── __init__.py                  # VERSION = "0.5.4"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -733,7 +736,7 @@ KoreanStocks/
 │           │   └── database.py              # SQLite CRUD
 │           ├── engine/
 │           │   ├── indicators.py            # 기술적 지표 계산
-│           │   ├── features.py              # ML 피처 추출 (20개, 공유)
+│           │   ├── features.py              # ML 피처 추출 (28개, 공유)
 │           │   ├── strategy.py              # 전략별 시그널 생성
 │           │   ├── prediction_model.py      # 6-모델 앙상블 추론 (트리 5 + TCN)
 │           │   ├── news_agent.py            # 뉴스 수집 + GPT 감성
