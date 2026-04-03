@@ -214,8 +214,8 @@ flowchart LR
     style FB2 fill:#f9f,stroke:#999,stroke-dasharray:5 5
 ```
 
-> `sentiment_norm = (sentiment_score + 100) / 2`  → 0~100 정규화
-> `macro_norm = (macro_sentiment_score + 100) / 2`  → 0~100 정규화
+> `sentiment_norm = (sentiment_score + 100) / 2`  → 0 ~ 100 정규화
+> `macro_norm = (macro_sentiment_score + 100) / 2`  → 0 ~ 100 정규화
 
 ---
 
