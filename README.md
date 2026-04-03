@@ -215,6 +215,7 @@ flowchart LR
 ```
 
 > `sentiment_norm = (sentiment_score + 100) / 2`  → 0 ~ 100 정규화
+
 > `macro_norm = (macro_sentiment_score + 100) / 2`  → 0 ~ 100 정규화
 
 ---
