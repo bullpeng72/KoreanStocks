@@ -1,7 +1,7 @@
 # 뉴스 감성 분석 시스템 기술 문서
 
-> Korean Stocks AI/ML Analysis System `v0.5.5`
-> 최종 업데이트: 2026-04-03
+> Korean Stocks AI/ML Analysis System `v0.5.6`
+> 최종 업데이트: 2026-05-11
 
 ---
 
@@ -28,7 +28,7 @@
 ```
 수집 (Naver News + DART 공시)
   → 전처리 (계열사 필터 + 중복 제거 + 시간 가중치)
-  → GPT-4o-mini 감성 분석
+  → GPT-5.4-nano 감성 분석
   → sentiment_score (-100 ~ 100)
   → composite 가중 반영 (25%)
 ```
@@ -150,7 +150,7 @@ GPT 프롬프트 예시:
 
 | 항목 | 값 |
 |------|-----|
-| 모델 | `gpt-4o-mini` (config.DEFAULT_MODEL) |
+| 모델 | `gpt-5.4-nano` (config.DEFAULT_MODEL) |
 | temperature | 0.1 (일관된 점수 산출) |
 | max_tokens | 200 |
 | response_format | `{"type": "json_object"}` |
@@ -317,7 +317,7 @@ composite = tech_score * 0.65 + sentiment_norm * 0.35
 
 ```
 거시 뉴스 수집 (Naver News API, 6개 키워드 × 5건)
-  → GPT-4o-mini 감성 분석
+  → GPT-5.4-nano 감성 분석
   → macro_sentiment_score (-100 ~ 100)
   → 시황 지표(VIX·S&P500·TNX·CSI300) 기반 레짐 분류
   → macro_regime: risk_on / uncertain / risk_off

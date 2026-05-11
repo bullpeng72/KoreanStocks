@@ -50,9 +50,9 @@ def _is_price_overheated(analysis: Dict[str, Any]) -> bool:
 def _passes_kospi_filter(analysis: Dict[str, Any]) -> bool:
     """KOSPI 종목에 황금조합 조건 강제 적용.
 
-    성과 분석: KOSPI 전체 정답률 35% vs 황금조합 충족 시 75%.
+    성과 분석(n=61): KOSPI 황금조합 62.2% vs 비황금조합 50.0%.
     황금조합: 거래량 배율 < 3x, 감성 0~40, 당일 변동 < 3%.
-    KOSDAQ은 조건 없이 통과.
+    KOSDAQ은 조건 없이 통과 (전체 감성 필터는 _is_sentiment_overheated로 별도 적용).
     """
     if analysis.get('market') != 'KOSPI':
         return True
@@ -63,6 +63,29 @@ def _passes_kospi_filter(analysis: Dict[str, Any]) -> bool:
     sentiment  = float(analysis.get('sentiment_score') or 0)
     change_pct = abs(float(analysis.get('change_pct') or 0))
     return vol_mult < 3.0 and 0 <= sentiment <= 40 and change_pct < 3.0
+
+
+def _is_sentiment_overheated(analysis: Dict[str, Any]) -> bool:
+    """강긍정 감성(>50) 차단 — 전체 시장(KOSPI·KOSDAQ) 적용.
+
+    성과 분석(n=234): 감성 구간별 역U자형 패턴이 전 시장에서 확인됨.
+    강긍정(60+) 정답률 33.3%, 중앙값 -11.01% — 재료 선반영 신호.
+    KOSPI는 _passes_kospi_filter(sentiment≤40)로 이미 차단되므로 실질 적용 대상은 KOSDAQ.
+    """
+    sentiment = float(analysis.get('sentiment_score') or 0)
+    return sentiment > 50
+
+
+def _is_sentiment_rsi_overheated(analysis: Dict[str, Any]) -> bool:
+    """감성 과열(≥25) + RSI 과매수(≥65) 복합 조건 — 전체 시장 적용.
+
+    성과 분석(n=41): 정답률 43.9%, 평균 수익 -2.89%.
+    단일 조건(감성≥25: 60.5% / RSI≥65: 49.1%)보다 조합 효과가 강함.
+    """
+    sentiment = float(analysis.get('sentiment_score') or 0)
+    inds = analysis.get('indicators') or {}
+    rsi = float(inds.get('rsi') or 0)
+    return sentiment >= 25 and rsi >= 65
 
 
 def _apply_bucket_quota(
@@ -326,26 +349,42 @@ class RecommendationAgent:
             )
             results = pre_filter_results
 
-        # ── 품질 필터 [I-2][I-3][S-2] ───────────────────────────────
-        # 거래량 폭증 / 재료소진 과열 / KOSPI 황금조합 미충족 종목 제거.
-        # 분석 근거: docs/6_PERFORMANCE_IMPROVEMENT.md §5 참조.
+        # ── 품질 필터 [I-2][I-3][S-2][N-2][N-4] ────────────────────
+        # 분석 근거: docs/6_PERFORMANCE_IMPROVEMENT.md §5·Phase2 참조.
         _pre_quality = len(results)
         _quality_filtered = [
             r for r in results
-            if not _is_volume_overheated(r)
-            and not _is_price_overheated(r)
-            and _passes_kospi_filter(r)
+            if not _is_volume_overheated(r)        # [I-2] 거래량 6x+
+            and not _is_price_overheated(r)        # [I-3] 급등+강감성
+            and not _is_sentiment_overheated(r)    # [N-4] 강긍정(>50) 전시장
+            and not _is_sentiment_rsi_overheated(r)# [N-2] 감성≥25+RSI≥65 복합
+            and _passes_kospi_filter(r)            # [S-2] KOSPI 황금조합
         ]
         if _quality_filtered:
             _removed = _pre_quality - len(_quality_filtered)
             if _removed > 0:
                 logger.info(
                     f"[품질 필터] {_pre_quality} → {len(_quality_filtered)}종목 "
-                    f"({_removed}건 제외: 거래량폭증·과열·KOSPI조건)"
+                    f"({_removed}건 제외: 거래량폭증·과열·강감성·감성RSI복합·KOSPI조건)"
                 )
             results = _quality_filtered
         else:
             logger.warning("[품질 필터] 결과 없음 — 필터 건너뜀 (전체 유지)")
+
+        # ── [N-3] risk_off + rebound BUY→HOLD ───────────────────────
+        # 성과 분석(n=10): risk_off 레짐 + rebound 버킷 정답률 30%, 평균 -7.45%.
+        # 하락장에서 기술적 반등 신호의 신뢰도가 구조적으로 낮음.
+        if regime == 'risk_off':
+            _n3_converted = 0
+            for r in results:
+                if r.get('bucket') == 'rebound':
+                    ai_op = r.get('ai_opinion') or {}
+                    if ai_op.get('action') == 'BUY':
+                        ai_op['action'] = 'HOLD'
+                        r['action_override'] = 'risk_off 레짐 + rebound 버킷 — BUY→HOLD 전환'
+                        _n3_converted += 1
+            if _n3_converted:
+                logger.info(f"[N-3] risk_off+rebound BUY→HOLD {_n3_converted}건 전환")
 
         # ── 상대 순위 계산 [S-3] ─────────────────────────────────────
         # 복합점수 절대값은 64~92점에 집중되어 변별력이 낮음.

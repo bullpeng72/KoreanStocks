@@ -1,7 +1,7 @@
 # 가치주 스크리닝 시스템 기술 문서
 
-> Korean Stocks AI/ML Analysis System `v0.5.5`
-> 최종 업데이트: 2026-04-03
+> Korean Stocks AI/ML Analysis System `v0.5.6`
+> 최종 업데이트: 2026-05-11
 
 ---
 

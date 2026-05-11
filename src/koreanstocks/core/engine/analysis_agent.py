@@ -107,6 +107,16 @@ class AnalysisAgent:
             composite_score=composite_score, macro_ctx=macro_ctx,
         )
 
+        # [N-1] RSI ≥ 65 BUY→HOLD (규칙 기반).
+        # [I-1]은 GPT weakness 텍스트에 '과매수'가 포함될 때만 동작하나,
+        # 실제 GPT 응답에서 해당 단어 출현 빈도가 낮아 실질적으로 비활성화 상태였음.
+        # 성과 분석(n=234): RSI 65~70 구간 정답률 37.8%, 중앙값 -5.25% — 전 구간 중 최악.
+        _rsi_latest = _safe_float(df_with_indicators.iloc[-1].get('rsi'), 1)
+        if _rsi_latest is not None and _rsi_latest >= 65 and ai_opinion.get('action') == 'BUY':
+            ai_opinion['action'] = 'HOLD'
+            ai_opinion['action_override'] = f'RSI {_rsi_latest:.1f} ≥ 65 과매수 구간 — BUY→HOLD 자동 조정'
+            logger.info(f"[{name}] [N-1] RSI {_rsi_latest:.1f} BUY→HOLD 전환")
+
         # 7. 결과 정리
         latest = df_with_indicators.iloc[-1]
         _bd = _safe_float(latest['bb_high'] - latest['bb_low']) if ('bb_low' in latest and 'bb_high' in latest) else None

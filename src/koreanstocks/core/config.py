@@ -64,7 +64,7 @@ class Config:
     DB_PATH = _db_raw if os.path.isabs(_db_raw) else os.path.join(BASE_DIR, _db_raw)
     
     # Model Settings
-    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MODEL = "gpt-5.4-nano"
     
     # Trading Settings
     TRANSACTION_FEE = 0.00015  # 0.015%

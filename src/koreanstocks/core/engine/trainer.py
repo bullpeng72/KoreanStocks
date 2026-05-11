@@ -25,7 +25,7 @@ import lightgbm as lgb
 from catboost import CatBoostClassifier
 
 from koreanstocks.core.config import config
-from koreanstocks.core.constants import MIN_MODEL_AUC
+from koreanstocks.core.constants import MIN_MODEL_AUC, AUTO_TUNE_THRESHOLDS
 from koreanstocks.core.data.provider import data_provider, fetch_macro_df, fetch_market_df
 from koreanstocks.core.engine.indicators import indicators
 from koreanstocks.core.engine.features import build_features, BASE_FEATURE_COLS
@@ -294,6 +294,84 @@ MODEL_CONFIGS: Dict[str, dict] = {
 # 변경 시 features.py 만 수정하면 학습/추론 양쪽 자동 반영됨
 
 MIN_STOCKS_PER_DATE = 5
+
+# ───────────────────────── Auto-Tune 설정 ─────────────────────────────────────
+
+# 모델별 랜덤 탐색 공간 (각 키=파라미터명, 값=후보값 리스트)
+_AT_SEARCH_SPACES: Dict[str, Dict[str, list]] = {
+    'random_forest': {
+        'max_depth':         [3, 4, 5],
+        'min_samples_leaf':  [15, 20, 30, 40, 50],
+        'min_samples_split': [20, 25, 30, 40, 50],
+        'max_features':      [0.3, 0.4, 0.5, 0.6],
+        'max_samples':       [0.7, 0.8, 0.9],
+    },
+    'gradient_boosting': {
+        'max_depth':        [2, 3, 4],
+        'learning_rate':    [0.03, 0.05, 0.08, 0.10],
+        'min_samples_leaf': [15, 20, 25, 30, 40],
+        'subsample':        [0.6, 0.7, 0.8],
+    },
+    'lightgbm': {
+        'max_depth':         [2, 3],
+        'min_child_samples': [50, 75, 100, 150, 200],
+        'reg_alpha':         [1.0, 2.0, 3.0, 5.0],
+        'reg_lambda':        [3.0, 5.0, 8.0, 10.0],
+        'colsample_bytree':  [0.4, 0.5, 0.6],
+    },
+    'catboost': {
+        'depth':            [2, 3, 4],
+        'l2_leaf_reg':      [3.0, 5.0, 7.0, 10.0],
+        'min_data_in_leaf': [20, 30, 40, 60, 80],
+        'subsample':        [0.6, 0.7, 0.8],
+    },
+    'xgboost_ranker': {
+        'max_depth':        [2, 3, 4],
+        'min_child_weight': [15, 20, 25, 30, 40],
+        'reg_alpha':        [0.5, 1.0, 2.0, 3.0],
+        'reg_lambda':       [2.0, 3.0, 5.0, 7.0],
+        'colsample_bytree': [0.5, 0.6, 0.7],
+    },
+}
+
+# 진단별 규칙 기반 파라미터 조정 (op: 'mul'=곱, 'add'=덧셈, 'set'=대입)
+_AT_ADJUST_RULES: Dict[str, Dict[str, Dict[str, tuple]]] = {
+    'OVERFIT': {
+        'random_forest':     {'min_samples_leaf': ('mul', 1.5), 'min_samples_split': ('mul', 1.5), 'max_depth': ('add', -1)},
+        'gradient_boosting': {'min_samples_leaf': ('mul', 1.5), 'learning_rate': ('mul', 0.6)},
+        'lightgbm':          {'min_child_samples': ('mul', 1.5), 'reg_alpha': ('mul', 1.5), 'reg_lambda': ('mul', 1.5)},
+        'catboost':          {'min_data_in_leaf': ('mul', 1.5), 'l2_leaf_reg': ('mul', 1.5), 'depth': ('add', -1)},
+        'xgboost_ranker':    {'min_child_weight': ('mul', 1.5), 'reg_alpha': ('mul', 1.5), 'reg_lambda': ('mul', 1.5)},
+    },
+    'UNDERFIT': {
+        'random_forest':     {'min_samples_leaf': ('mul', 0.7), 'min_samples_split': ('mul', 0.7), 'max_depth': ('add', 1)},
+        'gradient_boosting': {'min_samples_leaf': ('mul', 0.7), 'max_depth': ('add', 1)},
+        'lightgbm':          {'min_child_samples': ('mul', 0.7), 'reg_alpha': ('mul', 0.7), 'reg_lambda': ('mul', 0.7)},
+        'catboost':          {'min_data_in_leaf': ('mul', 0.7), 'l2_leaf_reg': ('mul', 0.7), 'depth': ('add', 1)},
+        'xgboost_ranker':    {'min_child_weight': ('mul', 0.7), 'reg_alpha': ('mul', 0.7), 'reg_lambda': ('mul', 0.7)},
+    },
+    'UNSTABLE': {
+        'random_forest':     {'min_samples_leaf': ('mul', 2.0), 'min_samples_split': ('mul', 2.0)},
+        'gradient_boosting': {'min_samples_leaf': ('mul', 2.0), 'learning_rate': ('mul', 0.5), 'subsample': ('mul', 0.9)},
+        'lightgbm':          {'min_child_samples': ('mul', 2.0), 'reg_alpha': ('mul', 2.0), 'reg_lambda': ('mul', 2.0)},
+        'catboost':          {'min_data_in_leaf': ('mul', 2.0), 'l2_leaf_reg': ('mul', 2.0)},
+        'xgboost_ranker':    {'min_child_weight': ('mul', 2.0), 'reg_alpha': ('mul', 2.0), 'reg_lambda': ('mul', 2.0)},
+    },
+    'WEAK': {
+        'random_forest':     {'min_samples_leaf': ('mul', 0.7), 'max_features': ('mul', 1.25)},
+        'gradient_boosting': {'learning_rate': ('mul', 1.5), 'subsample': ('mul', 1.1)},
+        'lightgbm':          {'min_child_samples': ('mul', 0.7), 'reg_alpha': ('mul', 0.6), 'reg_lambda': ('mul', 0.6)},
+        'catboost':          {'min_data_in_leaf': ('mul', 0.7), 'l2_leaf_reg': ('mul', 0.7)},
+        'xgboost_ranker':    {'min_child_weight': ('mul', 0.7), 'colsample_bytree': ('mul', 1.1)},
+    },
+}
+
+# 오버라이드 저장 제외 파라미터 (환경/재현성용, 하이퍼파라미터 아님)
+_AT_SKIP_PARAMS: frozenset = frozenset({
+    'random_state', 'random_seed', 'n_jobs', 'verbosity', 'verbose',
+    'use_label_encoder', 'eval_metric', 'class_weight', 'auto_class_weights',
+    'bootstrap_type',
+})
 
 # ───────────────────────────── 데이터 수집 ─────────────────────────────
 
@@ -690,9 +768,175 @@ def _train_final_model(
     return model, scaler, train_auc, test_auc, test_logloss, calibration_points, feature_importances, duration
 
 
+def _at_diagnose(test_auc: float, train_auc: float, cv_mean: float, cv_std: float) -> str:
+    """모델 진단 → 'PASS' | 'OVERFIT' | 'UNDERFIT' | 'UNSTABLE' | 'WEAK'.
+
+    우선순위: OVERFIT > UNDERFIT > UNSTABLE > WEAK > PASS
+    """
+    thr = AUTO_TUNE_THRESHOLDS
+    overfit_gap = train_auc - test_auc
+    if overfit_gap > thr['max_overfit_gap']:
+        return 'OVERFIT'
+    if test_auc < thr['trigger_test_auc']:
+        return 'UNDERFIT'
+    if not np.isnan(cv_std) and cv_std > thr['max_cv_auc_std']:
+        return 'UNSTABLE'
+    if not np.isnan(cv_mean) and cv_mean < thr['min_cv_auc']:
+        return 'WEAK'
+    return 'PASS'
+
+
+def _at_apply_rules(model_name: str, base_params: dict, diagnosis: str) -> dict:
+    """규칙 기반 파라미터 조정 → 조정된 params dict 반환 (base_params 깊은 복사본)."""
+    import copy
+    params = copy.deepcopy(base_params)
+    rules = _AT_ADJUST_RULES.get(diagnosis, {}).get(model_name, {})
+    for param, (op, val) in rules.items():
+        if param not in params:
+            continue
+        cur = params[param]
+        if op == 'mul':
+            new_val = cur * val
+            params[param] = max(1, round(new_val)) if isinstance(cur, int) else new_val
+        elif op == 'add':
+            new_val = cur + val
+            params[param] = max(1, int(new_val)) if isinstance(cur, int) else new_val
+        elif op == 'set':
+            params[param] = val
+    return params
+
+
+def _at_write_overrides(model_name: str, tuned_params: dict, original_params: dict) -> None:
+    """original_params 와 다른 값만 {name}_overrides.json 에 저장."""
+    PARAMS_DIR.mkdir(parents=True, exist_ok=True)
+    delta = {
+        k: v for k, v in tuned_params.items()
+        if k not in _AT_SKIP_PARAMS and original_params.get(k) != v
+    }
+    if not delta:
+        return
+    override_path = PARAMS_DIR / f"{model_name}_overrides.json"
+    with open(override_path, 'w', encoding='utf-8') as f:
+        json.dump(delta, f, indent=2, ensure_ascii=False)
+    logger.info(f"  [auto-tune] {model_name} 오버라이드 저장: {delta}")
+
+
+def _auto_tune_model(
+    name: str,
+    cfg: dict,
+    df_train: pd.DataFrame,
+    feat_names: List[str],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    unique_dates: list,
+    future_days: int,
+    current_metrics: dict,
+    max_trials: int = 15,
+) -> Tuple[Optional[dict], dict]:
+    """Phase 1 (규칙 기반) + Phase 2 (랜덤 탐색) Auto-Tune.
+
+    Walk-Forward CV만 실행 (최종 학습은 호출측 Phase 3에서 수행).
+
+    Returns
+    -------
+    (best_cfg, tune_log)
+        best_cfg : 개선된 cfg dict, 개선 없으면 None
+        tune_log : 진단·탐색 결과 메타 dict
+    """
+    import copy
+    import random
+
+    test_auc = current_metrics['test_auc']
+    train_auc = current_metrics['train_auc']
+    cv_mean = current_metrics.get('cv_mean', float('nan'))
+    cv_std  = current_metrics.get('cv_std',  float('nan'))
+
+    diagnosis = _at_diagnose(test_auc, train_auc, cv_mean, cv_std)
+    base_cv = cv_mean if not np.isnan(cv_mean) else 0.0
+    tune_log: dict = {
+        'diagnosis':    diagnosis,
+        'base_cv_mean': round(base_cv, 4) if base_cv else None,
+        'phase1_cv':    None,
+        'phase2_cv':    None,
+        'best_delta':   {},
+        'improvement':  0.0,
+        'trials':       0,
+    }
+
+    if diagnosis == 'PASS':
+        logger.info(f"  [auto-tune] {name}: PASS — 튜닝 건너뜀")
+        return None, tune_log
+
+    logger.info(f"  [auto-tune] {name}: {diagnosis} — 파라미터 탐색 시작 (max_trials={max_trials})")
+
+    best_cv   = base_cv
+    best_cfg: Optional[dict] = None
+    base_params = cfg['params']
+    search_space = _AT_SEARCH_SPACES.get(name, {})
+
+    def _cv_score(candidate_params: dict) -> float:
+        cand_cfg = copy.deepcopy(cfg)
+        cand_cfg['params'] = candidate_params
+        try:
+            cv_aucs, _ = _walk_forward_cv(
+                df_train, feat_names, cand_cfg, X_train, y_train, unique_dates, future_days
+            )
+            return float(np.mean(cv_aucs)) if cv_aucs else 0.0
+        except Exception as e:
+            logger.debug(f"  [auto-tune] CV 오류 ({name}): {e}")
+            return 0.0
+
+    # ── Phase 1: 규칙 기반 조정 ────────────────────────────────────────────
+    p1_params = _at_apply_rules(name, base_params, diagnosis)
+    p1_cv = _cv_score(p1_params)
+    tune_log['phase1_cv'] = round(p1_cv, 4)
+    logger.info(f"  [auto-tune] Phase1 ({diagnosis} 규칙): CV={p1_cv:.4f}")
+    if p1_cv > best_cv + 0.001:
+        best_cv = p1_cv
+        best_cfg = copy.deepcopy(cfg)
+        best_cfg['params'] = p1_params
+
+    # ── Phase 2: 랜덤 탐색 ─────────────────────────────────────────────────
+    if search_space:
+        rng = random.Random(42)
+        p2_best_cv = best_cv
+        for trial in range(max_trials):
+            trial_params = copy.deepcopy(best_cfg['params'] if best_cfg else base_params)
+            n_change = rng.randint(1, max(1, len(search_space) // 2))
+            for k in rng.sample(list(search_space.keys()), min(n_change, len(search_space))):
+                trial_params[k] = rng.choice(search_space[k])
+            t_cv = _cv_score(trial_params)
+            if t_cv > p2_best_cv + 0.001:
+                p2_best_cv = t_cv
+                best_cfg = copy.deepcopy(cfg)
+                best_cfg['params'] = trial_params
+                logger.info(f"  [auto-tune] Phase2 trial {trial + 1}/{max_trials}: CV={t_cv:.4f} ✨")
+        tune_log['phase2_cv'] = round(p2_best_cv, 4)
+        tune_log['trials']    = max_trials
+        best_cv = p2_best_cv
+    else:
+        logger.info(f"  [auto-tune] {name}: 탐색 공간 없음 — Phase2 건너뜀")
+
+    tune_log['improvement'] = round(best_cv - base_cv, 4)
+    if best_cfg is not None:
+        tune_log['best_delta'] = {
+            k: best_cfg['params'][k]
+            for k in search_space
+            if k in best_cfg['params'] and best_cfg['params'].get(k) != base_params.get(k)
+        }
+        logger.info(f"  [auto-tune] {name}: 최적 CV={best_cv:.4f} (개선: +{tune_log['improvement']:.4f})")
+    else:
+        logger.info(f"  [auto-tune] {name}: 개선 없음 — 기본 파라미터 유지")
+
+    return best_cfg, tune_log
+
+
 def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
                    future_days: int = 10,
-                   tcn_stock_data: Optional[dict] = None) -> None:
+                   tcn_stock_data: Optional[dict] = None,
+                   auto_tune: bool = False,
+                   max_trials: int = 15,
+                   save_overrides: bool = True) -> None:
     """모델 학습(이진 분류) → 평가 → 모델/스케일러/파라미터 저장.
 
     타깃: future_days 거래일 후 수익률 상위 25% = 1 / 하위 25% = 0 (중간 50% 제외, 이진 분류)
@@ -700,6 +944,9 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
     교차검증: Walk-Forward (롤링 윈도우, 20거래일 val 스텝, Purging 적용)
     Purging:  각 val 시작 전 future_days 거래일을 학습에서 제거 (label leakage 방지).
     tcn_stock_data: TCN 전용 시계열 데이터 ({code: {features, labels}}), None이면 TCN 건너뜀.
+    auto_tune: True이면 품질 미달 모델에 Phase1+2 CV 탐색 후 Phase3 전체 재학습 수행.
+    max_trials: Phase2 랜덤 탐색 시도 횟수 (기본 15).
+    save_overrides: True이면 Phase3 채택 파라미터를 {name}_overrides.json 에 저장.
     """
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     PARAMS_DIR.mkdir(parents=True, exist_ok=True)
@@ -751,6 +998,36 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
         overfit_gap  = round(train_auc - test_auc, 4)
         quality_pass = bool(test_auc >= MIN_MODEL_AUC)
 
+        # ── Auto-Tune Phase 1+2 (CV 탐색) + Phase 3 (전체 재학습) ───────────
+        tune_log: Optional[dict] = None
+        if auto_tune:
+            current_metrics = {
+                'test_auc': test_auc, 'train_auc': train_auc,
+                'cv_mean': cv_mean,   'cv_std':    cv_std,
+            }
+            best_at_cfg, tune_log = _auto_tune_model(
+                name, cfg, df_train, feat_names,
+                X_train, y_train, unique_dates, future_days,
+                current_metrics, max_trials,
+            )
+            if best_at_cfg is not None and tune_log.get('improvement', 0) > 0.001:
+                logger.info(f"  [auto-tune] Phase3: {name} 최적 파라미터로 전체 재학습 중...")
+                t0_at = time.time()
+                model, scaler, train_auc, test_auc, test_logloss, calibration_points, \
+                    feature_importances, duration = _train_final_model(
+                        best_at_cfg, feat_names, X_train, y_train, X_test, y_test,
+                        df_train, oof_preds, t0_at,
+                    )
+                overfit_gap  = round(train_auc - test_auc, 4)
+                quality_pass = bool(test_auc >= MIN_MODEL_AUC)
+                logger.info(
+                    f"  [auto-tune] Phase3 결과: test_auc={test_auc:.4f}  "
+                    f"gap={overfit_gap:.4f}  {'✅' if quality_pass else '⚠️'}"
+                )
+                if save_overrides:
+                    _at_write_overrides(name, best_at_cfg['params'], MODEL_CONFIGS[name]['params'])
+                cfg = best_at_cfg   # meta 저장 시 실제 사용 파라미터 반영
+
         logger.info(f"  AUC : {test_auc:.4f}  (학습 AUC: {train_auc:.4f}  과적합 gap: {overfit_gap:.4f})")
         if not np.isnan(test_logloss):
             logger.info(f"  LogLoss: {test_logloss:.4f}")
@@ -800,6 +1077,7 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
             "model_version":       version,
             "feature_importances": feature_importances,
             "calibration":         calibration_points,
+            "tune_log":            tune_log,
         }
         params_path = PARAMS_DIR / f"{name}_params.json"
         with open(params_path, 'w', encoding='utf-8') as f:
@@ -831,6 +1109,15 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
             test_ratio=0.2,
         )
         if tcn_result is not None:
+            if auto_tune:
+                at_tcn = _tcn.auto_tune_tcn(
+                    tcn_stock_data, future_days=future_days, test_ratio=0.2,
+                    max_trials=min(5, max_trials),
+                    base_test_auc=tcn_result['test_auc'],
+                )
+                if at_tcn is not None:
+                    tcn_result = at_tcn
+                    logger.info(f"  [auto-tune] TCN 개선: test_auc={tcn_result['test_auc']:.4f}")
             _tcn.save_tcn(tcn_result, MODEL_DIR, PARAMS_DIR)
             qmark  = "✅" if tcn_result["quality_pass"] else "⚠️ "
             cv_str = f"{tcn_result['cv_auc_mean']:.4f}" if tcn_result["cv_auc_mean"] else "N/A"
@@ -857,14 +1144,20 @@ def run_training(
     future_days: int = 10,
     stocks: Optional[List[str]] = None,
     test_ratio: float = 0.2,
+    auto_tune: bool = False,
+    max_trials: int = 15,
+    save_overrides: bool = True,
 ) -> None:
     """koreanstocks train 명령어 및 train_models.py 양쪽에서 호출하는 진입점.
 
     Args:
-        period:      학습 데이터 기간 (예: '2y', '1y')
-        future_days: 예측 대상 거래일 수 (기본값 10 = 2주, 중기 노이즈 최소화)
-        stocks:      학습 종목 코드 리스트 (None이면 DEFAULT_TRAINING_STOCKS 146개 고정 리스트 사용)
-        test_ratio:  검증 세트 비율 (0~1)
+        period:         학습 데이터 기간 (예: '2y', '1y')
+        future_days:    예측 대상 거래일 수 (기본값 10 = 2주, 중기 노이즈 최소화)
+        stocks:         학습 종목 코드 리스트 (None이면 DEFAULT_TRAINING_STOCKS 사용)
+        test_ratio:     검증 세트 비율 (0~1)
+        auto_tune:      True이면 품질 미달 모델 자동 파라미터 탐색·재학습
+        max_trials:     Phase2 랜덤 탐색 시도 횟수
+        save_overrides: True이면 채택 파라미터를 overrides.json 에 저장
     """
     if stocks is None:
         stocks = DEFAULT_TRAINING_STOCKS
@@ -882,6 +1175,8 @@ def run_training(
     logger.info(f"  검증 비율   : {test_ratio * 100:.0f}% (시계열 후반부)")
     logger.info(f"  타깃 변수   : {future_days}거래일 후 수익률 상위 25%/하위 25% 이진 분류 (중간 50% 제외, AUC-ROC)")
     logger.info(f"  피처 수     : {len(BASE_FEATURE_COLS)}개 (기술적+TA+거시경제)")
+    if auto_tune:
+        logger.info(f"  Auto-Tune   : 활성화 (max_trials={max_trials}, save_overrides={save_overrides})")
     logger.info("=" * 40)
 
     logger.info("\n[1/2] 학습 데이터 수집 중...")
@@ -891,4 +1186,6 @@ def run_training(
 
     logger.info("\n[2/2] 모델 학습 및 저장 중...")
     train_and_save(df_train, df_test, future_days=future_days,
-                   tcn_stock_data=tcn_stock_data)
+                   tcn_stock_data=tcn_stock_data,
+                   auto_tune=auto_tune, max_trials=max_trials,
+                   save_overrides=save_overrides)

@@ -265,6 +265,12 @@ def train(
     period: str = typer.Option("2y", help="학습 데이터 기간: 1y | [cyan]2y[/cyan]"),
     future_days: int = typer.Option(10, help="예측 대상 거래일 수 (기본 10 = 2주, 중기 노이즈 최소화)"),
     test_ratio: float = typer.Option(0.2, help="검증 세트 비율 (0~1)"),
+    auto_tune: bool = typer.Option(False, "--auto-tune", help="품질 미달 모델 자동 파라미터 탐색·재학습"),
+    max_trials: int = typer.Option(15, "--max-trials", help="Phase2 랜덤 탐색 시도 횟수"),
+    save_overrides: bool = typer.Option(
+        True, "--save-overrides/--no-save-overrides",
+        help="채택 파라미터를 overrides.json 에 저장 (다음 학습에 자동 적용)",
+    ),
 ):
     """
     [bold]ML 모델 재학습[/bold] — RF·GB·LGB·CB·XGBRanker·TCN 6-모델 앙상블
@@ -275,8 +281,16 @@ def train(
 
     [bold]타깃:[/bold] 10거래일 후 수익률 상위 25%/하위 25% 이진 분류 (중간 50% neutral zone 제외)
 
+    [bold]Auto-Tune 3단계:[/bold]
+    [dim]  Phase1 — 진단(OVERFIT/UNDERFIT/UNSTABLE/WEAK)별 규칙 기반 파라미터 조정 후 CV 평가[/dim]
+    [dim]  Phase2 — 랜덤 탐색 (--max-trials 회) 후 CV 평가[/dim]
+    [dim]  Phase3 — CV 개선 확인 시 최적 파라미터로 전체 재학습, 모델 덮어쓰기[/dim]
+
     [bold]예시:[/bold]
     [dim]  koreanstocks train[/dim]
+    [dim]  koreanstocks train --auto-tune[/dim]
+    [dim]  koreanstocks train --auto-tune --max-trials 20[/dim]
+    [dim]  koreanstocks train --auto-tune --no-save-overrides[/dim]
     [dim]  koreanstocks train --period 1y --future-days 10[/dim]
     [dim]  koreanstocks train --test-ratio 0.3[/dim]
     """
@@ -287,6 +301,9 @@ def train(
         future_days=future_days,
         stocks=DEFAULT_TRAINING_STOCKS,
         test_ratio=test_ratio,
+        auto_tune=auto_tune,
+        max_trials=max_trials,
+        save_overrides=save_overrides,
     )
 
 

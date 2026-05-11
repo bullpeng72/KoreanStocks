@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.5.5-blue)
+![version](https://img.shields.io/badge/version-0.5.6-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -770,7 +770,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.4"
+│       ├── __init__.py                  # VERSION = "0.5.6"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -832,6 +832,14 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.6 (2026-05-11) — 추천 성과 개선 Phase 2 + Auto-Tune + 모델 업그레이드
+
+- ✨ `analysis_agent.py`: [N-1] RSI ≥ 65 규칙 기반 BUY→HOLD (n=234 검증, RSI 65~70 구간 정답률 37.8%)
+- ✨ `recommendation_agent.py`: [N-2] 감성≥25 + RSI≥65 복합 제외 · [N-3] risk_off+rebound BUY→HOLD · [N-4] 강긍정 감성(>50) 전시장 제외
+- ✨ `trainer.py` + `tcn_model.py` + `cli.py`: Auto-Tune 3단계 — `koreanstocks train --auto-tune` (Phase1 규칙·Phase2 랜덤·Phase3 재학습)
+- 🔧 `config.py`: OpenAI 모델 `gpt-4o-mini` → `gpt-5.4-nano` 업그레이드
+- 📝 `docs/6_PERFORMANCE_IMPROVEMENT.md`: 사후 시뮬 결과 61.5% → 66.1% (234→171건) 추가
 
 ### v0.5.5 (2026-04-03) — 추천 성과 개선 Phase 1 완성 · 버킷 분석 문서화
 

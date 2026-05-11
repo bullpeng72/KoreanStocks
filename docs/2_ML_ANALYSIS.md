@@ -1,7 +1,7 @@
 # ML 분석 시스템 기술 문서
 
-> Korean Stocks AI/ML Analysis System `v0.5.5`
-> 최종 업데이트: 2026-04-03
+> Korean Stocks AI/ML Analysis System `v0.5.6`
+> 최종 업데이트: 2026-05-11
 
 ---
 
@@ -443,7 +443,26 @@ TCN은 피처 중요도(Gini) 개념이 없으므로 모델 신뢰도 탭에서 
 # CLI 명령어 (권장)
 koreanstocks train
 koreanstocks train --future-days 10 --period 2y --test-ratio 0.2
+
+# Auto-Tune 옵션 (v0.5.6+) — 품질 미달 모델 자동 파라미터 탐색·재학습
+koreanstocks train --auto-tune                   # 기본 15회 랜덤 탐색
+koreanstocks train --auto-tune --max-trials 20   # 탐색 횟수 조정
+koreanstocks train --auto-tune --no-save-overrides  # 이번만 적용, overrides.json 저장 안 함
 ```
+
+### Auto-Tune 3단계 동작
+
+| 단계 | 조건 | 동작 |
+|------|------|------|
+| Phase 1 | OVERFIT / UNDERFIT / UNSTABLE / WEAK 진단 | 규칙 기반 파라미터 조정 후 Walk-Forward CV 평가 |
+| Phase 2 | Phase1 결과가 기준 CV 미개선 또는 추가 탐색 | 랜덤 탐색 (max_trials회) 후 CV 비교 |
+| Phase 3 | Phase2 CV 개선 > 0.001 | 최적 파라미터로 전체 재학습·모델 덮어쓰기·overrides.json 저장 |
+
+진단 기준 (`constants.AUTO_TUNE_THRESHOLDS`):
+- **OVERFIT**: train-test AUC 갭 > 0.10
+- **UNDERFIT**: test AUC < 0.545 (MIN_MODEL_AUC=0.52 초과 포함)
+- **UNSTABLE**: CV AUC 표준편차 > 0.050
+- **WEAK**: CV AUC 평균 < 0.500
 
 ### 재학습 시 주의사항
 

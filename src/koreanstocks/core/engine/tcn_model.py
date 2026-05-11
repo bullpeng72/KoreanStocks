@@ -483,6 +483,59 @@ def load_tcn(model_dir, params_dir) -> Optional[dict]:
         return None
 
 
+def auto_tune_tcn(
+    stock_data: dict,
+    future_days: int = 10,
+    test_ratio: float = 0.2,
+    max_trials: int = 5,
+    base_test_auc: float = 0.0,
+    search_space: Optional[dict] = None,
+) -> Optional[dict]:
+    """TCN 하이퍼파라미터 랜덤 탐색 → 개선된 학습 결과 dict 또는 None.
+
+    base_test_auc 대비 개선이 없으면 None 반환.
+    각 시도마다 train_tcn()을 전체 호출하므로 max_trials=5 이하 권장.
+    """
+    if not _TORCH_OK:
+        return None
+
+    import random
+    default_space: dict = {
+        'channels': [16, 32, 64],
+        'dropout':  [0.2, 0.3, 0.4, 0.5],
+        'lr':       [5e-4, 1e-3, 2e-3],
+        'epochs':   [30, 40, 50],
+    }
+    space = search_space or default_space
+    rng   = random.Random(42)
+
+    best_result: Optional[dict] = None
+    best_auc = base_test_auc
+
+    for trial in range(max_trials):
+        trial_kwargs: dict = {}
+        for k in rng.sample(list(space.keys()), min(2, len(space))):
+            trial_kwargs[k] = rng.choice(space[k])
+        try:
+            result = train_tcn(
+                stock_data,
+                future_days=future_days,
+                test_ratio=test_ratio,
+                **trial_kwargs,
+            )
+            if result is not None and result['test_auc'] > best_auc + 0.001:
+                best_auc = result['test_auc']
+                best_result = result
+                logger.info(
+                    f"  [auto-tune/TCN] trial {trial + 1}/{max_trials}: "
+                    f"test_auc={result['test_auc']:.4f} ✨ params={trial_kwargs}"
+                )
+        except Exception as e:
+            logger.debug(f"  [auto-tune/TCN] trial {trial + 1} 오류: {e}")
+
+    return best_result
+
+
 def predict_proba_tcn(
     loaded: dict,
     feature_rows: np.ndarray,   # [T, F] 최근 T행 피처 (T >= lookback)

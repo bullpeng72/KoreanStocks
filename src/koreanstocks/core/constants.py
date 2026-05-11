@@ -42,6 +42,15 @@ REGIME_SCORE_THRESHOLD: Dict[str, float] = {
     "risk_off":  57.0,
 }
 
+# ── Auto-Tune 진단 임계값 (trainer.py 단일 소스) ──────────────────────────────
+# PASS 이외 진단 시 파라미터 자동 조정·재학습 대상 (koreanstocks train --auto-tune)
+AUTO_TUNE_THRESHOLDS: Dict[str, float] = {
+    'trigger_test_auc': 0.545,   # 이 값 미만이면 UNDERFIT 진단 → 자동 조정 대상
+    'max_overfit_gap':  0.10,    # train-test AUC 갭 상한 (초과 시 OVERFIT)
+    'min_cv_auc':       0.500,   # CV AUC 최솟값 (미달 시 WEAK)
+    'max_cv_auc_std':   0.050,   # CV AUC 표준편차 상한 (초과 시 UNSTABLE)
+}
+
 # ── 병렬 처리 Worker 수 (단일 소스) ──────────────────────────────────────────
 MAX_ANALYSIS_WORKERS: int = 10   # recommendation_agent 종목 병렬 분석
 MAX_SCREEN_WORKERS:   int = 15   # value/quality_screener 펀더멘털 배치 수집
