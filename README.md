@@ -454,6 +454,8 @@ flowchart LR
 
 > **과적합 갭 완화 예시**: CatBoost val-train AUC 갭이 0.10 이상이면 `depth 3→2`, `min_data_in_leaf 40→60`으로 조정 후 재학습.
 
+> **⚠️ Override 드리프트 주의**: override가 누적되어 depth가 기본값보다 커지면 오히려 과적합이 심해집니다. 모델 신뢰도 지표가 갑자기 악화되면 `koreanstocks train --reset-overrides` 로 전체 초기화 후 재학습하세요.
+
 ---
 
 ## 💡 실전 투자 활용 가이드
@@ -660,6 +662,10 @@ koreanstocks analyze 005930
 # ML 모델 재학습
 koreanstocks train
 koreanstocks train --period 2y --future-days 10
+koreanstocks train --auto-tune                         # 품질 미달 모델 자동 탐색·재학습
+koreanstocks train --auto-tune --reset-overrides       # override 초기화 후 기본값으로 탐색
+koreanstocks train --auto-tune --max-trials 20         # 랜덤 탐색 횟수 확대
+koreanstocks train --auto-tune --no-save-overrides     # 이번만 적용, overrides.json 미저장
 
 # DB 동기화 (PyPI 설치 환경)
 koreanstocks sync              # 최초 수신 또는 날짜 갱신
@@ -832,6 +838,14 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.6-hotfix (2026-05-12) — Auto-Tune 드리프트 방지 강화
+
+- 🐛 `trainer.py`: Phase3 test AUC guard — 튜닝 후 `test_auc < 원본 - 0.005`이면 결과 거부·원본 모델 복원 (`_AT_TEST_AUC_MARGIN = 0.005`)
+- 🐛 `trainer.py`: Phase2 depth 방향 제약 — OVERFIT 진단 시 `max_depth/depth` 증가 시도 자동 차단 (이번 사고의 직접 원인)
+- ✨ `trainer.py`: Stale override 경고 — OVERFIT인데 override가 depth를 기본값보다 크게 설정 시 `train --reset-overrides` 권장 로그 출력
+- ✨ `trainer.py` + `cli.py`: `--reset-overrides` 플래그 추가 — 학습 전 모든 `*_overrides.json` 삭제 후 기본 `MODEL_CONFIGS`로 복원
+- ✨ `trainer.py`: `_DEPTH_PARAMS` 상수 추가 — 모델별 depth 파라미터명 단일 소스화
 
 ### v0.5.6 (2026-05-11) — 추천 성과 개선 Phase 2 + Auto-Tune + 모델 업그레이드
 

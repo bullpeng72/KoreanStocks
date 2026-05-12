@@ -65,7 +65,7 @@
 ```
 UI          FastAPI + Reveal.js (일일 브리핑) + Vanilla JS (인터랙티브 대시보드 8탭)
 CLI         Typer (10개 명령어: serve / recommend / analyze / train / outcomes / value / quality / init / sync / home)
-AI/LLM      OpenAI GPT-4o-mini (뉴스 감성 분석, AI 종합 의견)
+AI/LLM      OpenAI gpt-5.4-nano (뉴스 감성 분석, AI 종합 의견)
 ML          Scikit-learn (Random Forest, Gradient Boosting) + XGBoost Ranker + LightGBM + CatBoost
             + PyTorch TCN (선택적, pip install koreanstocks[dl])
             → 6-모델 앙상블 (분류기+TCN 75% + 랜커 25%, AUC 기반 Softmax 가중치)
@@ -114,7 +114,7 @@ DB          SQLite (data/storage/stock_analysis.db)
  FinanceDataReader / KIND API    OHLCV · 종목목록 (2,600종목+)
  Naver News API                  종목 관련 뉴스 검색
  DART Open API                   재무제표 공시 (PER · PBR · ROE 등)
- OpenAI GPT-4o-mini              감성 분석 · AI 종합 의견
+ OpenAI gpt-5.4-nano              감성 분석 · AI 종합 의견
  Yahoo Finance                   VIX · S&P500 거시지표
 
 [저장소]
@@ -155,7 +155,7 @@ FinanceDataReader + KIND API (KOSPI · KOSDAQ 전체 종목)
          → 101분위수 캘리브레이션 → 0-100 균등 스케일
 
   3단계  뉴스 감성    → sentiment_score (-100-100)
-         GPT-4o-mini · 지수감쇠 시간가중치
+         gpt-5.4-nano · 지수감쇠 시간가중치
 
   4단계  GPT AI 의견  → BUY / HOLD / SELL · 목표가 · 강점·약점
 
@@ -551,7 +551,7 @@ koreanstocks init --non-interactive  # 빈 템플릿 생성 (CI용)
 
 ```ini
 # ── 필수 ──────────────────────────────────────────────────────
-OPENAI_API_KEY=sk-proj-...         # GPT-4o-mini 뉴스 감성·AI 의견
+OPENAI_API_KEY=sk-proj-...         # gpt-5.4-nano 뉴스 감성·AI 의견
 NAVER_CLIENT_ID=abc123             # Naver News API
 NAVER_CLIENT_SECRET=xyz789
 TELEGRAM_BOT_TOKEN=123456:ABC-...  # 추천 리포트 발송
@@ -594,6 +594,10 @@ koreanstocks analyze 005930
 # ML 모델 재학습
 koreanstocks train
 koreanstocks train --period 2y --future-days 10
+koreanstocks train --auto-tune                         # Auto-Tune 3단계 (진단→탐색→재학습)
+koreanstocks train --auto-tune --max-trials 20         # Phase2 랜덤 탐색 횟수 지정
+koreanstocks train --auto-tune --reset-overrides       # 기존 override 초기화 후 Auto-Tune
+koreanstocks train --reset-overrides                   # override만 초기화 후 기본 재학습
 
 # DB 동기화 (PyPI 설치 환경)
 koreanstocks sync              # 최초 수신 또는 날짜 갱신
@@ -769,11 +773,18 @@ KoreanStocks/
 
 ## 📝 변경 이력
 
+### v0.5.6-hotfix (2026-05-12) — Auto-Tune 드리프트 방지 + 안전장치 강화
+
+- 🐛 `trainer.py`: Override 드리프트 원인 해소 — 기존 override가 depth를 증가시킨 경우 OVERFIT 진단 시 경고 출력 (`--reset-overrides` 안내)
+- 🐛 `trainer.py`: Phase2 depth 방향 제약 — OVERFIT 시 `max_depth`/`depth` 증가 금지, UNDERFIT 시 감소 금지
+- 🐛 `trainer.py`: Phase3 test AUC 가드 — `new_test_auc < original - 0.005` 시 Auto-Tune 결과 거부·원본 복원
+- ✨ `cli.py`: `--reset-overrides` 옵션 추가 — 학습 전 모든 override 파일 삭제 후 기본 MODEL_CONFIGS로 초기화
+
 ### v0.5.6 (2026-05-11) — 추천 성과 개선 Phase 2 + Auto-Tune + 모델 업그레이드
 
 - ✨ `analysis_agent.py`: [N-1] RSI ≥ 65 규칙 기반 BUY→HOLD (n=234 검증, RSI 65~70 구간 정답률 37.8%)
 - ✨ `recommendation_agent.py`: [N-2] 감성≥25 + RSI≥65 복합 제외 · [N-3] risk_off+rebound BUY→HOLD · [N-4] 강긍정 감성(>50) 전시장 제외
-- ✨ `trainer.py` + `tcn_model.py` + `cli.py`: Auto-Tune 3단계 — `koreanstocks train --auto-tune` (Phase1 규칙·Phase2 랜덤·Phase3 재학습)
+- ✨ `trainer.py` + `tcn_model.py` + `cli.py`: Auto-Tune 3단계 — `koreanstocks train --auto-tune` (Phase1 규칙 진단 → Phase2 랜덤 탐색·OVERFIT 시 depth 증가 금지 → Phase3 전체 재학습·test AUC 하락 0.005 초과 시 원본 복원)
 - 🔧 `config.py`: OpenAI 모델 `gpt-4o-mini` → `gpt-5.4-nano` 업그레이드
 - 📝 `docs/6_PERFORMANCE_IMPROVEMENT.md`: 사후 시뮬 결과 61.5% → 66.1% (234→171건) 추가
 

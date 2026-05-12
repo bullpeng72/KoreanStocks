@@ -307,10 +307,11 @@ _AT_SEARCH_SPACES: Dict[str, Dict[str, list]] = {
         'max_samples':       [0.7, 0.8, 0.9],
     },
     'gradient_boosting': {
+        'n_estimators':     [200, 300, 400, 500],
         'max_depth':        [2, 3, 4],
-        'learning_rate':    [0.03, 0.05, 0.08, 0.10],
+        'learning_rate':    [0.02, 0.03, 0.05, 0.08],
         'min_samples_leaf': [15, 20, 25, 30, 40],
-        'subsample':        [0.6, 0.7, 0.8],
+        'subsample':        [0.5, 0.6, 0.7, 0.8],
     },
     'lightgbm': {
         'max_depth':         [2, 3],
@@ -372,6 +373,18 @@ _AT_SKIP_PARAMS: frozenset = frozenset({
     'use_label_encoder', 'eval_metric', 'class_weight', 'auto_class_weights',
     'bootstrap_type',
 })
+
+# 모델별 "depth" 역할 파라미터명 — 방향 제약 검사에 사용
+_DEPTH_PARAMS: Dict[str, str] = {
+    'random_forest':     'max_depth',
+    'gradient_boosting': 'max_depth',
+    'lightgbm':          'max_depth',
+    'catboost':          'depth',
+    'xgboost_ranker':    'max_depth',
+}
+
+# Phase3 채택 기준: 원본 test_auc 대비 허용 하락폭 (이 범위 초과 하락 시 결과 거부)
+_AT_TEST_AUC_MARGIN: float = 0.005
 
 # ───────────────────────────── 데이터 수집 ─────────────────────────────
 
@@ -874,6 +887,21 @@ def _auto_tune_model(
     base_params = cfg['params']
     search_space = _AT_SEARCH_SPACES.get(name, {})
 
+    # ── 스테일 override 감지 (OVERFIT 진단인데 depth가 기본값보다 큰 경우) ──────
+    depth_key = _DEPTH_PARAMS.get(name)
+    if depth_key:
+        baseline_depth = MODEL_CONFIGS.get(name, {}).get('params', {}).get(depth_key)
+        effective_depth = base_params.get(depth_key)
+        if (diagnosis == 'OVERFIT'
+                and baseline_depth is not None
+                and effective_depth is not None
+                and effective_depth > baseline_depth):
+            logger.warning(
+                f"  [auto-tune] ⚠️  {name}: 기존 override가 {depth_key}를 "
+                f"{baseline_depth} → {effective_depth} 로 증가시킴 — OVERFIT 주요 원인일 수 있습니다. "
+                f"`train --reset-overrides` 후 재시도를 권장합니다."
+            )
+
     def _cv_score(candidate_params: dict) -> float:
         cand_cfg = copy.deepcopy(cfg)
         cand_cfg['params'] = candidate_params
@@ -891,22 +919,32 @@ def _auto_tune_model(
     p1_cv = _cv_score(p1_params)
     tune_log['phase1_cv'] = round(p1_cv, 4)
     logger.info(f"  [auto-tune] Phase1 ({diagnosis} 규칙): CV={p1_cv:.4f}")
-    if p1_cv > best_cv + 0.001:
+    if p1_cv > best_cv + 0.003:
         best_cv = p1_cv
         best_cfg = copy.deepcopy(cfg)
         best_cfg['params'] = p1_params
 
     # ── Phase 2: 랜덤 탐색 ─────────────────────────────────────────────────
     if search_space:
-        rng = random.Random(42)
+        rng = random.Random(int(time.time() * 1000) % (2**31))
         p2_best_cv = best_cv
         for trial in range(max_trials):
             trial_params = copy.deepcopy(best_cfg['params'] if best_cfg else base_params)
             n_change = rng.randint(1, max(1, len(search_space) // 2))
             for k in rng.sample(list(search_space.keys()), min(n_change, len(search_space))):
                 trial_params[k] = rng.choice(search_space[k])
+
+            # 방향 제약: OVERFIT이면 depth 증가 금지, UNDERFIT이면 depth 감소 금지
+            if depth_key and depth_key in trial_params:
+                base_depth_val = base_params.get(depth_key)
+                if base_depth_val is not None:
+                    if diagnosis == 'OVERFIT' and trial_params[depth_key] > base_depth_val:
+                        trial_params[depth_key] = base_depth_val
+                    elif diagnosis == 'UNDERFIT' and trial_params[depth_key] < base_depth_val:
+                        trial_params[depth_key] = base_depth_val
+
             t_cv = _cv_score(trial_params)
-            if t_cv > p2_best_cv + 0.001:
+            if t_cv > p2_best_cv + 0.003:
                 p2_best_cv = t_cv
                 best_cfg = copy.deepcopy(cfg)
                 best_cfg['params'] = trial_params
@@ -1012,6 +1050,17 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
             )
             if best_at_cfg is not None and tune_log.get('improvement', 0) > 0.001:
                 logger.info(f"  [auto-tune] Phase3: {name} 최적 파라미터로 전체 재학습 중...")
+                # 원본 모델 아티팩트 보관 (test AUC guard 실패 시 복원)
+                _at_orig = dict(
+                    model=model, scaler=scaler,
+                    test_auc=test_auc, train_auc=train_auc,
+                    test_logloss=test_logloss,
+                    calibration_points=calibration_points,
+                    feature_importances=feature_importances,
+                    duration=duration,
+                    overfit_gap=overfit_gap,
+                    quality_pass=quality_pass,
+                )
                 t0_at = time.time()
                 model, scaler, train_auc, test_auc, test_logloss, calibration_points, \
                     feature_importances, duration = _train_final_model(
@@ -1020,13 +1069,32 @@ def train_and_save(df_train: pd.DataFrame, df_test: pd.DataFrame,
                     )
                 overfit_gap  = round(train_auc - test_auc, 4)
                 quality_pass = bool(test_auc >= MIN_MODEL_AUC)
-                logger.info(
-                    f"  [auto-tune] Phase3 결과: test_auc={test_auc:.4f}  "
-                    f"gap={overfit_gap:.4f}  {'✅' if quality_pass else '⚠️'}"
-                )
-                if save_overrides:
-                    _at_write_overrides(name, best_at_cfg['params'], MODEL_CONFIGS[name]['params'])
-                cfg = best_at_cfg   # meta 저장 시 실제 사용 파라미터 반영
+                # Test AUC guard: 원본 대비 허용 하락폭 초과 시 Phase3 결과 거부
+                if test_auc >= _at_orig['test_auc'] - _AT_TEST_AUC_MARGIN:
+                    logger.info(
+                        f"  [auto-tune] Phase3 채택: test_auc "
+                        f"{_at_orig['test_auc']:.4f} → {test_auc:.4f}  "
+                        f"gap={overfit_gap:.4f}  {'✅' if quality_pass else '⚠️'}"
+                    )
+                    if save_overrides:
+                        _at_write_overrides(name, best_at_cfg['params'], MODEL_CONFIGS[name]['params'])
+                    cfg = best_at_cfg   # meta 저장 시 실제 사용 파라미터 반영
+                    tune_log['accepted'] = True
+                else:
+                    logger.warning(
+                        f"  [auto-tune] Phase3 거부: test_auc 하락 "
+                        f"{_at_orig['test_auc']:.4f} → {test_auc:.4f} "
+                        f"(허용 하락폭 {_AT_TEST_AUC_MARGIN}) — 원본 파라미터 유지"
+                    )
+                    model, scaler         = _at_orig['model'], _at_orig['scaler']
+                    test_auc, train_auc   = _at_orig['test_auc'], _at_orig['train_auc']
+                    test_logloss          = _at_orig['test_logloss']
+                    calibration_points    = _at_orig['calibration_points']
+                    feature_importances   = _at_orig['feature_importances']
+                    duration              = _at_orig['duration']
+                    overfit_gap           = _at_orig['overfit_gap']
+                    quality_pass          = _at_orig['quality_pass']
+                    tune_log['accepted']  = False
 
         logger.info(f"  AUC : {test_auc:.4f}  (학습 AUC: {train_auc:.4f}  과적합 gap: {overfit_gap:.4f})")
         if not np.isnan(test_logloss):
@@ -1147,17 +1215,19 @@ def run_training(
     auto_tune: bool = False,
     max_trials: int = 15,
     save_overrides: bool = True,
+    reset_overrides: bool = False,
 ) -> None:
     """koreanstocks train 명령어 및 train_models.py 양쪽에서 호출하는 진입점.
 
     Args:
-        period:         학습 데이터 기간 (예: '2y', '1y')
-        future_days:    예측 대상 거래일 수 (기본값 10 = 2주, 중기 노이즈 최소화)
-        stocks:         학습 종목 코드 리스트 (None이면 DEFAULT_TRAINING_STOCKS 사용)
-        test_ratio:     검증 세트 비율 (0~1)
-        auto_tune:      True이면 품질 미달 모델 자동 파라미터 탐색·재학습
-        max_trials:     Phase2 랜덤 탐색 시도 횟수
-        save_overrides: True이면 채택 파라미터를 overrides.json 에 저장
+        period:          학습 데이터 기간 (예: '2y', '1y')
+        future_days:     예측 대상 거래일 수 (기본값 10 = 2주, 중기 노이즈 최소화)
+        stocks:          학습 종목 코드 리스트 (None이면 DEFAULT_TRAINING_STOCKS 사용)
+        test_ratio:      검증 세트 비율 (0~1)
+        auto_tune:       True이면 품질 미달 모델 자동 파라미터 탐색·재학습
+        max_trials:      Phase2 랜덤 탐색 시도 횟수
+        save_overrides:  True이면 채택 파라미터를 overrides.json 에 저장
+        reset_overrides: True이면 학습 전 모든 overrides.json 삭제 (기본 MODEL_CONFIGS 복원)
     """
     if stocks is None:
         stocks = DEFAULT_TRAINING_STOCKS
@@ -1166,6 +1236,16 @@ def run_training(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
     )
+
+    if reset_overrides:
+        override_files = list(PARAMS_DIR.glob("*_overrides.json"))
+        for f in override_files:
+            f.unlink()
+            logger.info(f"[reset] 오버라이드 초기화: {f.name}")
+        if override_files:
+            logger.info(f"[reset] {len(override_files)}개 오버라이드 파일 삭제 → 기본 MODEL_CONFIGS 복원")
+        else:
+            logger.info("[reset] 초기화할 오버라이드 파일 없음")
 
     logger.info("=" * 40)
     logger.info("  ML 모델 학습 시작")

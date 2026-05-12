@@ -271,6 +271,10 @@ def train(
         True, "--save-overrides/--no-save-overrides",
         help="채택 파라미터를 overrides.json 에 저장 (다음 학습에 자동 적용)",
     ),
+    reset_overrides: bool = typer.Option(
+        False, "--reset-overrides",
+        help="학습 전 모든 override 파일 삭제 — 기본 MODEL_CONFIGS로 초기화 후 재학습",
+    ),
 ):
     """
     [bold]ML 모델 재학습[/bold] — RF·GB·LGB·CB·XGBRanker·TCN 6-모델 앙상블
@@ -283,12 +287,13 @@ def train(
 
     [bold]Auto-Tune 3단계:[/bold]
     [dim]  Phase1 — 진단(OVERFIT/UNDERFIT/UNSTABLE/WEAK)별 규칙 기반 파라미터 조정 후 CV 평가[/dim]
-    [dim]  Phase2 — 랜덤 탐색 (--max-trials 회) 후 CV 평가[/dim]
-    [dim]  Phase3 — CV 개선 확인 시 최적 파라미터로 전체 재학습, 모델 덮어쓰기[/dim]
+    [dim]  Phase2 — 랜덤 탐색 (--max-trials 회), OVERFIT 시 depth 증가 금지 (방향 제약)[/dim]
+    [dim]  Phase3 — CV 개선 시 전체 재학습, test AUC 하락 0.005 초과 시 결과 거부·원본 복원[/dim]
 
     [bold]예시:[/bold]
     [dim]  koreanstocks train[/dim]
     [dim]  koreanstocks train --auto-tune[/dim]
+    [dim]  koreanstocks train --auto-tune --reset-overrides  # override 초기화 후 탐색[/dim]
     [dim]  koreanstocks train --auto-tune --max-trials 20[/dim]
     [dim]  koreanstocks train --auto-tune --no-save-overrides[/dim]
     [dim]  koreanstocks train --period 1y --future-days 10[/dim]
@@ -304,6 +309,7 @@ def train(
         auto_tune=auto_tune,
         max_trials=max_trials,
         save_overrides=save_overrides,
+        reset_overrides=reset_overrides,
     )
 
 

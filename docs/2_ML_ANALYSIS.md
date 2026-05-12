@@ -1,7 +1,7 @@
 # ML 분석 시스템 기술 문서
 
 > Korean Stocks AI/ML Analysis System `v0.5.6`
-> 최종 업데이트: 2026-05-11
+> 최종 업데이트: 2026-05-12
 
 ---
 
@@ -445,9 +445,10 @@ koreanstocks train
 koreanstocks train --future-days 10 --period 2y --test-ratio 0.2
 
 # Auto-Tune 옵션 (v0.5.6+) — 품질 미달 모델 자동 파라미터 탐색·재학습
-koreanstocks train --auto-tune                   # 기본 15회 랜덤 탐색
-koreanstocks train --auto-tune --max-trials 20   # 탐색 횟수 조정
-koreanstocks train --auto-tune --no-save-overrides  # 이번만 적용, overrides.json 저장 안 함
+koreanstocks train --auto-tune                          # 기본 15회 랜덤 탐색
+koreanstocks train --auto-tune --max-trials 20          # 탐색 횟수 조정
+koreanstocks train --auto-tune --no-save-overrides      # 이번만 적용, overrides.json 저장 안 함
+koreanstocks train --auto-tune --reset-overrides        # override 전체 초기화 후 탐색 (드리프트 복구)
 ```
 
 ### Auto-Tune 3단계 동작
@@ -455,12 +456,16 @@ koreanstocks train --auto-tune --no-save-overrides  # 이번만 적용, override
 | 단계 | 조건 | 동작 |
 |------|------|------|
 | Phase 1 | OVERFIT / UNDERFIT / UNSTABLE / WEAK 진단 | 규칙 기반 파라미터 조정 후 Walk-Forward CV 평가 |
-| Phase 2 | Phase1 결과가 기준 CV 미개선 또는 추가 탐색 | 랜덤 탐색 (max_trials회) 후 CV 비교 |
-| Phase 3 | Phase2 CV 개선 > 0.001 | 최적 파라미터로 전체 재학습·모델 덮어쓰기·overrides.json 저장 |
+| Phase 2 | Phase1 결과가 기준 CV 미개선 또는 추가 탐색 | 랜덤 탐색 (max_trials회), OVERFIT 시 depth 증가 금지 (방향 제약) |
+| Phase 3 | Phase2 CV 개선 > 0.001 | 최적 파라미터로 전체 재학습·test AUC guard 통과 시에만 덮어쓰기·overrides.json 저장 |
+
+**Phase3 test AUC guard**: 재학습 후 `new_test_auc < original_test_auc - 0.005`이면 결과를 거부하고 원본 모델을 유지한다 (`_AT_TEST_AUC_MARGIN = 0.005`). CV 개선이 실제 test 성능 하락을 가리는 것을 방지.
+
+**Phase2 depth 방향 제약**: `_DEPTH_PARAMS` 상수로 모델별 depth 파라미터(`max_depth` / `depth`)를 관리. OVERFIT 진단 시 랜덤 탐색에서 현재 depth보다 큰 값이 선택되면 현재 depth로 강제 고정.
 
 진단 기준 (`constants.AUTO_TUNE_THRESHOLDS`):
 - **OVERFIT**: train-test AUC 갭 > 0.10
-- **UNDERFIT**: test AUC < 0.545 (MIN_MODEL_AUC=0.52 초과 포함)
+- **UNDERFIT**: test AUC < 0.545
 - **UNSTABLE**: CV AUC 표준편차 > 0.050
 - **WEAK**: CV AUC 평균 < 0.500
 
@@ -469,6 +474,7 @@ koreanstocks train --auto-tune --no-save-overrides  # 이번만 적용, override
 - 재학습 후 `models/saved/model_params/*.json`의 AUC 수치 확인 권장
 - 품질 게이트 미달(`test_auc < 0.52`) 시 모델 저장은 되지만 추론 시 자동 제외
 - ML 피처 목록 변경 시 `features.py`의 `BASE_FEATURE_COLS`만 수정하면 됨 — `trainer.py`·`prediction_model.py` 양쪽이 이 목록을 import해 자동 동기화됨
+- **Override 드리프트 주의**: override가 누적되어 depth가 기본값보다 커지면 과적합이 심해질 수 있음. 모델 신뢰도 지표가 갑자기 악화되면 `koreanstocks train --reset-overrides`로 전체 초기화 후 재학습
 
 ### 파라미터 오버라이드 워크플로우
 
@@ -523,7 +529,10 @@ models/saved/model_params/
 └── ...
 ```
 
-오버라이드 초기화는 대시보드 UI의 **[오버라이드 초기화]** 버튼 또는 파일 직접 삭제로 수행.
+오버라이드 초기화는 다음 방법 중 하나로 수행:
+- 대시보드 UI의 **[오버라이드 초기화]** 버튼 (모델별 개별 초기화)
+- `koreanstocks train --reset-overrides` (전체 일괄 초기화 후 재학습)
+- 파일 직접 삭제: `rm models/saved/model_params/*_overrides.json`
 
 ---
 

@@ -136,7 +136,11 @@ koreanstocks analyze 005930
 
 # ML 모델 재학습
 koreanstocks train
-python train_models.py                 # 직접 실행도 가능
+koreanstocks train --auto-tune                         # 품질 미달 모델 자동 탐색·재학습
+koreanstocks train --auto-tune --reset-overrides       # override 전체 초기화 후 탐색 (드리프트 복구)
+koreanstocks train --auto-tune --max-trials 20         # 랜덤 탐색 횟수 확대
+koreanstocks train --auto-tune --no-save-overrides     # 이번만 적용, overrides.json 미저장
+python train_models.py                                 # 직접 실행도 가능
 
 # 추천 결과 성과 추적 (5·10·20거래일 후 실적 검증)
 koreanstocks outcomes                  # 미검증 추천 결과 업데이트 + 통계 출력
@@ -210,6 +214,13 @@ DB_PATH=data/storage/stock_analysis.db
 - GitHub Actions 스케줄 변경
 
 ## 📝 변경 이력
+
+### v0.5.6-hotfix (2026-05-12) — Auto-Tune 드리프트 방지 강화
+
+- 🐛 `trainer.py`: Phase3 test AUC guard — 튜닝 후 `test_auc < 원본 - 0.005`이면 결과 거부·원본 복원 (`_AT_TEST_AUC_MARGIN`)
+- 🐛 `trainer.py`: Phase2 depth 방향 제약 — OVERFIT 시 `max_depth/depth` 증가 시도 차단, UNDERFIT 시 감소 시도 차단 (`_DEPTH_PARAMS`)
+- ✨ `trainer.py`: Stale override 경고 — OVERFIT인데 override가 depth를 기본값보다 크게 설정 시 경고 로그 출력
+- ✨ `trainer.py` + `cli.py`: `--reset-overrides` 플래그 — 학습 전 `*_overrides.json` 전체 삭제 후 기본 `MODEL_CONFIGS` 복원
 
 ### v0.5.6 (2026-05-11) — 추천 성과 개선 Phase 2 + Auto-Tune + 모델 업그레이드
 
