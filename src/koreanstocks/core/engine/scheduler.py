@@ -20,11 +20,10 @@ def run_daily_update(limit: int = 9):
             from koreanstocks.core.utils.outcome_tracker import (
                 record_outcomes, get_outcome_stats, get_recent_outcomes
             )
-            updated = record_outcomes()
-            if updated > 0:
-                stats   = get_outcome_stats()
-                recent  = get_recent_outcomes(days=14)
-                notifier.notify_performance_report(stats, recent)
+            record_outcomes()
+            stats  = get_outcome_stats()
+            recent = get_recent_outcomes(days=14)
+            notifier.notify_performance_report(stats, recent)
         except Exception as e:
             logger.warning(f"Outcome tracking 실패 (분석은 계속 진행): {e}")
 

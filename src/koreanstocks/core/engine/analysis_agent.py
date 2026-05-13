@@ -290,7 +290,7 @@ class AnalysisAgent:
                         ],
                         response_format={"type": "json_object"},
                         temperature=0.1,
-                        max_completion_tokens=600,
+                        max_completion_tokens=1500,
                     )
                     result = json.loads(response.choices[0].message.content)
                     break
