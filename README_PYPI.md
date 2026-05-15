@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.5.6-blue)
+![version](https://img.shields.io/badge/version-0.5.7-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -710,7 +710,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.6"
+│       ├── __init__.py                  # VERSION = "0.5.7"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -772,6 +772,12 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.7 (2026-05-15) — 세그폴트 수정 · GPT API 호환
+
+- 🐛 `prediction_model.py`: torch+LightGBM OpenMP 충돌 세그폴트 수정 — `tcn_model` 지연 임포트 전환 (Python 3.13 + PyTorch 2.12 + LightGBM 4.6 환경에서 `koreanstocks serve` 즉시 크래시)
+- 🐛 `analysis_agent.py`: GPT 응답 JSON 잘림 수정
+- 🔧 `analysis_agent.py`: `max_tokens` → `max_completion_tokens` 전환 (gpt-5.4-nano 호환)
 
 ### v0.5.6-hotfix (2026-05-12) — Auto-Tune 드리프트 방지 + 안전장치 강화
 

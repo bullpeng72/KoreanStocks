@@ -13,7 +13,10 @@ from koreanstocks.core.constants import MIN_MODEL_AUC, ENSEMBLE_CLF_WEIGHT, ENSE
 from koreanstocks.core.data.provider import fetch_macro_df as _fetch_macro_df, fetch_market_df as _fetch_market_df
 from koreanstocks.core.engine.indicators import indicators
 from koreanstocks.core.engine.features import build_features as _build_features, BASE_FEATURE_COLS
-from koreanstocks.core.engine import tcn_model as _tcn
+# tcn_model은 torch를 임포트함 — torch+LightGBM OpenMP 충돌 방지를 위해 지연 임포트
+def _get_tcn():
+    from koreanstocks.core.engine import tcn_model as _tcn  # noqa: PLC0415
+    return _tcn
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +159,7 @@ class StockPredictionModel:
             )
 
         # ── TCN 딥러닝 모델 로드 (선택적, PyTorch 필요) ────────────────────
+        _tcn = _get_tcn()
         if _tcn.is_available():
             tcn_loaded = _tcn.load_tcn(self.model_dir, self.params_dir)
             if tcn_loaded is not None:
@@ -312,6 +316,7 @@ class StockPredictionModel:
         # ── TCN 추론 (분류기 버킷에 포함) ──────────────────────────────────
         if self._tcn_loaded is not None:
             try:
+                _tcn = _get_tcn()
                 feat_matrix = features[feat_cols].values   # [T, F]
                 prob = _tcn.predict_proba_tcn(self._tcn_loaded, feat_matrix)
                 if prob is not None:

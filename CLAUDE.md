@@ -1,4 +1,4 @@
-# Korean Stocks AI/ML Analysis System `v0.5.6`
+# Korean Stocks AI/ML Analysis System `v0.5.7`
 
 KOSPI·KOSDAQ 종목을 기술적 지표, 머신러닝, 뉴스 감성 분석으로 자동 스크리닝하고 텔레그램 리포트를 발송하는 투자 보조 플랫폼.
 
@@ -215,6 +215,12 @@ DB_PATH=data/storage/stock_analysis.db
 - GitHub Actions 스케줄 변경
 
 ## 📝 변경 이력
+
+### v0.5.7 (2026-05-15) — 세그폴트 수정 · GPT API 호환
+
+- 🐛 `prediction_model.py`: torch+LightGBM OpenMP 충돌 세그폴트 수정 — `tcn_model` 지연 임포트 전환 (Python 3.13 + PyTorch 2.12 + LightGBM 4.6 환경에서 `koreanstocks serve` 실행 시 즉시 크래시 발생)
+- 🐛 `analysis_agent.py`: GPT 응답 JSON 잘림 수정
+- 🔧 `analysis_agent.py`: `max_tokens` → `max_completion_tokens` 전환 (gpt-5.4-nano 호환)
 
 ### v0.5.6-hotfix (2026-05-12) — Auto-Tune 드리프트 방지 강화
 
