@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.5.7-blue)
+![version](https://img.shields.io/badge/version-0.5.8-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -71,7 +71,7 @@ ML          Scikit-learn (Random Forest, Gradient Boosting) + XGBoost Ranker + L
             → 6-모델 앙상블 (분류기+TCN 75% + 랜커 25%, AUC 기반 Softmax 가중치)
 기술 지표    ta (RSI, MACD, BB, SMA, OBV, ADX, VWAP, CMF, MFI, Stochastic, CCI, ATR, Donchian)
              + finta (SQZMI, VZO, Fisher Transform, Williams Fractal)
-ML 피처     28개 (변동성·추세강도·시장 상대강도·모멘텀·finta·거래량·거시경제 10개·극값감지)
+ML 피처     30개 (변동성·추세강도·시장 상대강도·모멘텀·finta·거래량·거시경제 10개·극값감지)
 데이터       FinanceDataReader, KIND API (KRX 전종목), Naver News API, DART Open API (선택)
              Yahoo Finance (VIX·S&P500·NASDAQ·10Y금리·장단기스프레드·금·유가·CSI300)
 DB          SQLite (data/storage/stock_analysis.db)
@@ -189,7 +189,7 @@ flowchart TD
     POOL["분석 풀 (최대 80종목)"] --> PAR["병렬 분석<br/>max_workers=5 · timeout=60s"]
 
     PAR --> T["1단계 기술적 지표<br/>tech_score 0~100<br/>추세(40) + 모멘텀(30) + BB/CMF/거래량(30)"]
-    PAR --> ML["2단계 ML 앙상블<br/>ml_score 0~100<br/>RF · GB · LGB · CB + XGBRanker<br/>28개 피처 · 101분위 캘리브레이션"]
+    PAR --> ML["2단계 ML 앙상블<br/>ml_score 0~100<br/>RF · GB · LGB · CB + XGBRanker<br/>30개 피처 · 101분위 캘리브레이션"]
     PAR --> N["3단계 뉴스 감성<br/>sentiment_score -100~100<br/>gpt-5.4-nano · 지수감쇠 시간가중"]
     PAR --> MN["3단계-B 거시감성<br/>macro_sentiment -100~100<br/>MacroNewsAgent · 레짐 감지"]
 
@@ -226,9 +226,10 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph FEAT["입력 피처 (28개)"]
+    subgraph FEAT["입력 피처 (30개)"]
         F1["변동성·추세강도<br/>atr_ratio · adx<br/>bb_width · bb_position"]
-        F2["시장 상대강도<br/>rs_vs_mkt_3m"]
+        F2["시장 상대강도<br/>rs_vs_mkt_3m · rs_vs_mkt_6m"]
+        F2b["EMA130·장기추세<br/>ema130_ratio"]
         F3["모멘텀·추세<br/>high_52w_ratio · mom_accel<br/>macd_diff · macd_slope_5d<br/>price_sma_5_ratio"]
         F4["finta 지표<br/>fisher · bullish_fractal_5d"]
         F5["거래량·강도<br/>mfi · vzo · obv_trend<br/>low_52w_ratio"]
@@ -251,6 +252,7 @@ flowchart LR
         CAL["101분위수 캘리브레이션<br/>→ 0~100 균등 스케일"]
     end
 
+    F2 --- F2b
     FEAT --> MODELS
     RF & GB & LGB & CB & TCN --> CLS
     XGB --> RNK
@@ -777,7 +779,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.7"
+│       ├── __init__.py                  # VERSION = "0.5.8"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -807,7 +809,7 @@ KoreanStocks/
 │           │   └── database.py              # SQLite CRUD
 │           ├── engine/
 │           │   ├── indicators.py            # 기술적 지표 계산
-│           │   ├── features.py              # ML 피처 추출 (28개, 공유)
+│           │   ├── features.py              # ML 피처 추출 (30개, 공유)
 │           │   ├── strategy.py              # 전략별 시그널 생성
 │           │   ├── prediction_model.py      # 6-모델 앙상블 추론 (트리 5 + TCN)
 │           │   ├── tcn_model.py             # TCN 딥러닝 모델 (Dilated Causal Conv1D, 선택적)
@@ -842,6 +844,19 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.8 (2026-06-01) — EMA130 · RS(상대강도) · 유동성·섹터 필터 추가
+
+- ✨ `indicators.py`: EMA130(130일 지수이평) 계산 추가 — 현재가 > EMA130 시 trend_score +2pt (장기 상승 추세 확인)
+- ✨ `features.py`: ML 피처 28→30개 — `ema130_ratio`(현재가/EMA130-1), `rs_vs_mkt_6m`(6개월 초과수익) 추가
+- ✨ `provider.py`: `fetch_market_df()`에 `return_6m`(126일 수익률) 컬럼 추가
+- ✨ `analysis_agent.py`: 분석 결과에 `ema130_ratio`, `ret_6m` 필드 추가; GPT 프롬프트에 EMA130 대비 위치 컨텍스트 추가
+- ✨ `recommendation_agent.py`: RS 교차 종목 백분위 계산 — 후보군 내 6개월 수익률 백분위(0~100)를 `rs_score` 필드로 추가
+- ✨ `recommendation_agent.py`: [L-1] 최소 주가 필터 (3,000원 미만 극소형주 제외)
+- ✨ `recommendation_agent.py`: [L-2] 최소 거래대금 필터 (avg_vol × close < 3억/일 제외)
+- ✨ `recommendation_agent.py`: [L-3] RS 버킷별 하한 필터 (momentum ≥40 / volume ≥30 / rebound 무제한)
+- ✨ `recommendation_agent.py`: 섹터 모멘텀 보정 — 후보군 내 섹터 평균 rs_score ≥ 60 시 강세 섹터로 분류, 정렬 +3pt 가산
+- 🔧 기존 ML 모델(28 피처)은 tech_score fallback으로 안전하게 동작; `koreanstocks train` 재학습 시 30 피처 모델 활성화
 
 ### v0.5.7 (2026-05-15) — 세그폴트 수정 · GPT API 호환
 

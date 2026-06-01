@@ -21,8 +21,11 @@ BASE_FEATURE_COLS = [
     'bb_position',          # BB 내 가격 위치 (0=하단, 1=상단)
     # ── 중기 모멘텀 / 상대강도 ────────────────────────────────
     'rs_vs_mkt_3m',         # KOSPI 대비 3개월 초과수익
+    'rs_vs_mkt_6m',         # KOSPI 대비 6개월 초과수익 (RS 핵심 — IBD RS 유사)
     'high_52w_ratio',       # 52주 고가 대비 현재가 (추세 위치)
     'mom_accel',            # 모멘텀 가속도 (1m - 3m/3)
+    # ── 장기 추세 ────────────────────────────────────────────
+    'ema130_ratio',         # 현재가 / EMA130 - 1 (양수=6개월 장기 상승 추세 위)
     # ── 추세 / 가격 모멘텀 ────────────────────────────────────
     'macd_diff',            # MACD 다이버전스 (추세 전환)
     'macd_slope_5d',        # MACD 다이버전스 5일 기울기 (모멘텀 가속)
@@ -50,7 +53,7 @@ BASE_FEATURE_COLS = [
     'gold_1m',              # 금 1개월 수익률 (안전자산 수요)
     'oil_1m',               # WTI 유가 1개월 수익률 (비용·인플레이션)
     'csi300_1m',            # 중국 CSI300 1개월 수익률 (수출·소재株 선행)
-]  # 28개 피처
+]  # 30개 피처
 
 
 def build_features(
@@ -97,6 +100,7 @@ def build_features(
     )
     _return_1m = df['close'].pct_change(20)
     _return_3m = df['close'].pct_change(60)
+    _return_6m = df['close'].pct_change(126)
     feat['mom_accel'] = _return_1m - _return_3m / 3.0
 
     if market_df is not None and not market_df.empty:
@@ -104,8 +108,18 @@ def build_features(
             market_df = market_df[~market_df.index.duplicated(keep='last')]
         aligned = market_df.reindex(feat.index).ffill()
         feat['rs_vs_mkt_3m'] = (_return_3m - aligned.get('return_3m', 0)).fillna(0)
+        feat['rs_vs_mkt_6m'] = (_return_6m - aligned.get('return_6m', 0)).fillna(0)
     else:
         feat['rs_vs_mkt_3m'] = 0.0
+        feat['rs_vs_mkt_6m'] = _return_6m.fillna(0.0)
+
+    # ── 장기 추세 ─────────────────────────────────────────────
+    # EMA130: 데이터 부족(< 130일) 시 중립값 0.0으로 채워 dropna 회피
+    if 'ema130' in df.columns:
+        _ema130 = df['ema130'].replace(0, np.nan)
+        feat['ema130_ratio'] = (df['close'] / _ema130 - 1).fillna(0.0)
+    else:
+        feat['ema130_ratio'] = 0.0
 
     # ── 추세 / 가격 모멘텀 ────────────────────────────────────
     feat['macd_diff']         = df['macd_diff']

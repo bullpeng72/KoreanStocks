@@ -121,6 +121,17 @@ class AnalysisAgent:
         latest = df_with_indicators.iloc[-1]
         _bd = _safe_float(latest['bb_high'] - latest['bb_low']) if ('bb_low' in latest and 'bb_high' in latest) else None
         _bb_pos = _safe_float((latest['close'] - latest['bb_low']) / _bd, 2) if _bd else None
+
+        # EMA130 대비 위치 (장기 추세)
+        _ema130_val = latest.get('ema130')
+        _ema130_ratio = None
+        if _ema130_val is not None and not pd.isna(_ema130_val) and float(_ema130_val) > 0:
+            _ema130_ratio = _safe_float(float(latest['close']) / float(_ema130_val) - 1, 4)
+
+        # 6개월 수익률 (recommendation_agent에서 RS 교차 종목 백분위 계산용)
+        _ret_6m_series = df_with_indicators['close'].pct_change(126)
+        _ret_6m = _safe_float(_ret_6m_series.iloc[-1], 4) if not _ret_6m_series.empty else None
+
         analysis_res = {
             "code": code,
             "name": name,
@@ -152,11 +163,13 @@ class AnalysisAgent:
                 "current_vol":_safe_int(latest['volume']),
             },
             "indicators": {
-                "rsi":     _safe_float(latest['rsi'],           2),
-                "macd":    _safe_float(latest['macd'],          2),
-                "macd_sig":_safe_float(latest['macd_signal'],   2),
-                "sma_20":  _safe_float(latest['sma_20'],        0),
-                "bb_pos":  _bb_pos,
+                "rsi":          _safe_float(latest['rsi'],           2),
+                "macd":         _safe_float(latest['macd'],          2),
+                "macd_sig":     _safe_float(latest['macd_signal'],   2),
+                "sma_20":       _safe_float(latest['sma_20'],        0),
+                "bb_pos":       _bb_pos,
+                "ema130_ratio": _ema130_ratio,  # 현재가/EMA130-1 (양수=장기 상승 추세)
+                "ret_6m":       _ret_6m,        # 6개월 수익률 (RS 백분위 계산용)
             },
             "ai_opinion":      ai_opinion,
             "macro_regime":    macro_ctx.get("macro_regime",       "uncertain"),
@@ -197,6 +210,14 @@ class AnalysisAgent:
             macd_sig_val = macd_sig_val if macd_sig_val is not None else 'N/A'
             _bb_denom = _safe_float(latest['bb_high'] - latest['bb_low']) if ('bb_low' in latest and 'bb_high' in latest) else None
             bb_pos = _safe_float((latest['close'] - latest['bb_low']) / _bb_denom, 2) if _bb_denom else 'N/A'
+
+            # EMA130 대비 위치 계산
+            _ema130_v = latest.get('ema130')
+            if _ema130_v is not None and not pd.isna(_ema130_v) and float(_ema130_v) > 0:
+                _ema130_ratio_pct = round((float(latest['close']) / float(_ema130_v) - 1) * 100, 1)
+                ema130_str = f"{_ema130_ratio_pct:+.1f}% ({'장기 상승 추세 위' if _ema130_ratio_pct > 0 else '장기 추세 하회'})"
+            else:
+                ema130_str = 'N/A (데이터 부족)'
 
             # 시장/섹터 맥락 문자열 구성
             mkt_lines = []
@@ -260,6 +281,7 @@ class AnalysisAgent:
             - RSI(14): {rsi_val} (30 이하: 과매도, 70 이상: 과매수)
             - MACD: {macd_val} / Signal: {macd_sig_val} → {macd_direction}
             - 볼린저 밴드 위치: {bb_pos} (0=하단, 0.5=중간, 1=상단)
+            - EMA130 대비: {ema130_str} (장기 6개월 추세 위치)
 
             [최근 뉴스 요약]
             - 근거: {news_res.get('reason', '정보 없음')}

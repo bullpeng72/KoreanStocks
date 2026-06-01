@@ -12,6 +12,9 @@ from koreanstocks.core.constants import (
     BUCKET_DEFAULT, BUCKET_LABELS, BUCKET_RATIOS as _BUCKET_RATIOS,
     calc_composite_score_from_dict,
     MAX_ANALYSIS_WORKERS, REGIME_SCORE_THRESHOLD,
+    RS_MIN_SCORE,
+    SECTOR_HOT_THRESHOLD, SECTOR_MOMENTUM_BONUS,
+    MIN_STOCK_PRICE, MIN_AVG_TRADE_VALUE,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +91,53 @@ def _is_sentiment_rsi_overheated(analysis: Dict[str, Any]) -> bool:
     return sentiment >= 25 and rsi >= 65
 
 
+def _is_price_too_low(analysis: Dict[str, Any]) -> bool:
+    """최소 주가 미달 여부 (MIN_STOCK_PRICE).
+
+    주가 3,000원 미만 종목은 유동성·신뢰도가 낮고 스프레드 비용이 과도하여 제외.
+    """
+    price = float(analysis.get('current_price') or 0)
+    return price > 0 and price < MIN_STOCK_PRICE
+
+
+def _is_trade_value_too_low(analysis: Dict[str, Any]) -> bool:
+    """최소 평균 거래대금 미달 여부 (MIN_AVG_TRADE_VALUE).
+
+    일평균 거래대금(avg_vol × current_price) 3억원 미만 종목은 진입·청산 시
+    슬리피지가 커 실제 수익률이 모델 예측과 크게 달라질 수 있어 제외.
+    """
+    stats = analysis.get('stats') or {}
+    avg_vol = float(stats.get('avg_vol') or 0)
+    price   = float(analysis.get('current_price') or 0)
+    if avg_vol <= 0 or price <= 0:
+        return False
+    return (avg_vol * price) < MIN_AVG_TRADE_VALUE
+
+
+def _is_rs_weak(analysis: Dict[str, Any]) -> bool:
+    """후보군 내 RS(6개월 수익률 백분위) 미달 여부 — 버킷별 임계값 적용.
+
+    momentum/volume 버킷에서 rs_score가 임계값 미만이면 제외.
+    rs_score는 RS 계산 블록(recommendation_agent)에서 0~100으로 부여.
+    rebound 버킷은 저RS 반등 종목을 타겟하므로 하한 없음.
+    """
+    bucket    = analysis.get('bucket', BUCKET_DEFAULT)
+    min_score = RS_MIN_SCORE.get(bucket, 0)
+    if min_score <= 0:
+        return False
+    rs = int(analysis.get('rs_score') or 50)
+    return rs < min_score
+
+
+def _rank_score(r: Dict[str, Any]) -> float:
+    """정렬 전용 점수 = composite_score + 강세 섹터 보너스.
+
+    DB에 저장되는 composite_score 값에는 영향을 주지 않고,
+    _apply_bucket_quota 내 후보 정렬에만 사용한다.
+    """
+    return _composite_score(r) + (SECTOR_MOMENTUM_BONUS if r.get('sector_hot') else 0.0)
+
+
 def _apply_bucket_quota(
     results: List[Dict[str, Any]],
     limit: int,
@@ -98,6 +148,7 @@ def _apply_bucket_quota(
     2단계: 쿼터 미달 버킷은 교차 버킷 잉여 후보로 보충 + 버킷 재태깅
            → 최종 결과에 3개 버킷이 모두 대표되도록 보장.
     3단계: 전체 limit 미달이면 점수 순으로 보충.
+    정렬 키: composite_score + 강세 섹터 보너스 (_rank_score).
     """
     max_per_sector = max(1, round(limit / 3))
 
@@ -148,7 +199,7 @@ def _apply_bucket_quota(
     for bucket_name, quota in quotas.items():
         bucket_results = sorted(
             [r for r in results if r.get('bucket') == bucket_name],
-            key=_composite_score, reverse=True,
+            key=_rank_score, reverse=True,
         )
         picks = _pick(bucket_results, quota)
         selected.extend(picks)
@@ -166,7 +217,7 @@ def _apply_bucket_quota(
     for bucket_name, needed in bucket_shortfall.items():
         cross_pool = sorted(
             [r for r in results if r.get('code') not in selected_codes],
-            key=_composite_score, reverse=True,
+            key=_rank_score, reverse=True,
         )
         cross_picks = _pick(cross_pool, needed)
         for r in cross_picks:
@@ -185,7 +236,7 @@ def _apply_bucket_quota(
     if len(selected) < limit:
         remaining = sorted(
             [r for r in results if r.get('code') not in selected_codes],
-            key=_composite_score, reverse=True,
+            key=_rank_score, reverse=True,
         )
         picks = _pick(remaining, limit - len(selected))
         selected.extend(picks)
@@ -326,6 +377,42 @@ class RecommendationAgent:
             f"rebound={result_dist.get('rebound',0)})"
         )
 
+        # ── RS 교차 종목 백분위 계산 ──────────────────────────────────
+        # 6개월 수익률(ret_6m)을 분석 대상 전체 종목 내 백분위로 변환 → 0~100 rs_score
+        # 시장 전체 대비 절대 RS는 아니지만, 당일 후보군 내 상대강도를 측정함.
+        _ret6m_pairs = [(r, (r.get('indicators') or {}).get('ret_6m')) for r in results]
+        _valid_pairs = [(r, v) for r, v in _ret6m_pairs if v is not None]
+        if len(_valid_pairs) >= 2:
+            _sorted_vals = sorted(v for _, v in _valid_pairs)
+            _n = len(_sorted_vals)
+            for r, v in _valid_pairs:
+                _rank = sum(1 for s in _sorted_vals if s <= v)
+                r['rs_score'] = round(_rank / _n * 100)
+            for r, v in _ret6m_pairs:
+                if v is None:
+                    r['rs_score'] = 50
+        else:
+            for r in results:
+                r['rs_score'] = 50
+
+        # ── 섹터 RS 집계 및 강세 섹터 태깅 ─────────────────────────
+        # 후보군 내 섹터별 평균 rs_score를 계산해 강세 섹터(≥SECTOR_HOT_THRESHOLD) 종목에
+        # sector_hot=True 태그를 추가한다. _apply_bucket_quota에서 정렬 보너스로 활용.
+        _sector_rs_map: Dict[str, list] = {}
+        for r in results:
+            _sec = r.get('sector') or 'unknown'
+            _sector_rs_map.setdefault(_sec, []).append(r.get('rs_score', 50))
+        _sector_avg_rs: Dict[str, float] = {
+            s: sum(v) / len(v) for s, v in _sector_rs_map.items()
+        }
+        _hot_sectors = {s for s, avg in _sector_avg_rs.items() if avg >= SECTOR_HOT_THRESHOLD}
+        if _hot_sectors:
+            logger.info(f"[섹터 로테이션] 강세 섹터({len(_hot_sectors)}개): {sorted(_hot_sectors)}")
+        for r in results:
+            _sec = r.get('sector') or 'unknown'
+            r['sector_rs_avg'] = round(_sector_avg_rs.get(_sec, 50.0), 1)
+            r['sector_hot']    = _sec in _hot_sectors
+
         # ── Phase 3: 거시 레짐 기반 필터링 ─────────────────────────
         # analysis_agent가 이미 macro_news_agent를 캐시로 호출했으므로 추가 API 호출 없음
         from koreanstocks.core.engine.macro_news_agent import macro_news_agent
@@ -349,7 +436,7 @@ class RecommendationAgent:
             )
             results = pre_filter_results
 
-        # ── 품질 필터 [I-2][I-3][S-2][N-2][N-4] ────────────────────
+        # ── 품질 필터 [I-2][I-3][S-2][N-2][N-4][L-1][L-2][L-3] ────
         # 분석 근거: docs/6_PERFORMANCE_IMPROVEMENT.md §5·Phase2 참조.
         _pre_quality = len(results)
         _quality_filtered = [
@@ -359,13 +446,16 @@ class RecommendationAgent:
             and not _is_sentiment_overheated(r)    # [N-4] 강긍정(>50) 전시장
             and not _is_sentiment_rsi_overheated(r)# [N-2] 감성≥25+RSI≥65 복합
             and _passes_kospi_filter(r)            # [S-2] KOSPI 황금조합
+            and not _is_price_too_low(r)           # [L-1] 최소 주가(3,000원) 미달
+            and not _is_trade_value_too_low(r)     # [L-2] 최소 거래대금(3억) 미달
+            and not _is_rs_weak(r)                 # [L-3] 버킷별 RS 하한 미달
         ]
         if _quality_filtered:
             _removed = _pre_quality - len(_quality_filtered)
             if _removed > 0:
                 logger.info(
                     f"[품질 필터] {_pre_quality} → {len(_quality_filtered)}종목 "
-                    f"({_removed}건 제외: 거래량폭증·과열·강감성·감성RSI복합·KOSPI조건)"
+                    f"({_removed}건 제외: 거래량폭증·과열·강감성·감성RSI복합·KOSPI조건·저유동성·저RS)"
                 )
             results = _quality_filtered
         else:
@@ -408,13 +498,15 @@ class RecommendationAgent:
             rec['macro_regime_label'] = macro_ctx.get("macro_regime_label", "불확실")
         self._save_to_db(final_recs)
 
-        # 최종 버킷 분포 로깅
+        # 최종 버킷 분포 로깅 (강세 섹터 포함)
         final_dist = Counter(r.get('bucket', '?') for r in final_recs)
+        hot_count  = sum(1 for r in final_recs if r.get('sector_hot'))
         logger.info(
             f"최종 추천 {len(final_recs)}종목 버킷 분포: "
             f"volume={final_dist.get('volume',0)}, "
             f"momentum={final_dist.get('momentum',0)}, "
-            f"rebound={final_dist.get('rebound',0)}"
+            f"rebound={final_dist.get('rebound',0)}  "
+            f"강세섹터={hot_count}종목"
         )
 
         return final_recs

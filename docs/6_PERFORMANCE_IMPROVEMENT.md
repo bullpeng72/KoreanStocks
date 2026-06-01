@@ -1,7 +1,7 @@
 # 추천 성과 분석 및 개선 계획
 
-> Korean Stocks AI/ML Analysis System `v0.5.7`
-> 작성일: 2026-04-02 / 최종 업데이트: 2026-05-15
+> Korean Stocks AI/ML Analysis System `v0.5.8`
+> 작성일: 2026-04-02 / 최종 업데이트: 2026-06-01
 > 분석 기준: 2026-03-04 ~ 04-10, **234건** (5거래일 성과 확인분 — 원본 45건 대비 5.2배)
 
 ## 구현 현황
@@ -19,9 +19,12 @@
 | [N-3] risk_off + rebound BUY→HOLD | ✅ 완료 | `recommendation_agent.py` |
 | [N-4] 강긍정 감성(>50) 전시장 차단 | ✅ 완료 | `recommendation_agent.py` |
 | [M-1] 거시감성 레짐 효과 검증 | ✅ 검증 완료 | n=45, risk_off+rebound 30% / -7.45% 확인 → [N-3] 구현 |
-| [M-2] 연속 추천 가중치 감쇠 | ⏳ 대기 | Phase 3 |
-| [M-3] 섹터별 보정 로직 | ⏳ 대기 | Phase 3 |
+| [M-2] 연속 추천 가중치 감쇠 | ⏳ 대기 | Phase 4 |
+| [M-3] 섹터별 보정 로직 | ✅ 완료 | `recommendation_agent.py` ([L-3] 섹터 RS 집계 + 강세 섹터 정렬 보너스) |
 | [M-4] 버킷 비율 동적 조정 | ⏳ 검토 중 | n=78/52/104 충분 — momentum↑·volume↓ 방향 확인 |
+| [L-1] 최소 주가 필터 (3,000원) | ✅ 완료 | `recommendation_agent.py` (1,000~2,000원대 극소형주 제외) |
+| [L-2] 최소 거래대금 필터 (3억/일) | ✅ 완료 | `recommendation_agent.py` (avg_vol × close < 3억 제외) |
+| [L-3] RS 버킷별 하한 필터 | ✅ 완료 | `recommendation_agent.py` (momentum≥40, volume≥30, rebound 제외) |
 
 ---
 

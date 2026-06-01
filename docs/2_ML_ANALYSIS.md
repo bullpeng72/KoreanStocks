@@ -1,7 +1,7 @@
 # ML 분석 시스템 기술 문서
 
-> Korean Stocks AI/ML Analysis System `v0.5.7`
-> 최종 업데이트: 2026-05-15
+> Korean Stocks AI/ML Analysis System `v0.5.8`
+> 최종 업데이트: 2026-06-01
 
 ---
 
@@ -80,12 +80,13 @@ df_all = df_all.dropna(subset=['target'])     # 중간 50% 제외
 
 ## 3. 피처 엔지니어링
 
-총 **28개 피처** — 순수 기술지표 + 거시경제 (PyKrx 펀더멘털·수급 제외)
+총 **30개 피처** — 순수 기술지표 + 거시경제 (PyKrx 펀더멘털·수급 제외)
 
 > 제거된 피처 (v0.3.2): `sqzmi`, `vol_change`, `macd_diff_change`, `obv_change`, `rsi_mfi_div`, `candle_body`, `rs_vs_mkt_1m` — 3모델 합산 중요도 최하위(<2%)
 > 피처 교체 (v0.3.7): `adx_di_diff`·`cmf`·`vol_ratio` 제거 / `bb_position`·`mfi`·`low_52w_ratio` 추가. `atr_ratio` → rolling 60일 percentile 변환 (레짐 의존성 제거).
 > 피처 추가 (v0.4.1): `obv_trend`, `rsi`(0-1 정규화), `cci_pct` 추가 — 17→20개.
 > 거시 피처 확장 (v0.5.0): `vix_change_5d`, `tnx_level`, `tnx_change_1m`, `yield_spread`, `nasdaq_1m`, `gold_1m`, `oil_1m`, `csi300_1m` 추가 — 20→28개. yfinance 8개 심볼(^VIX·^GSPC·^IXIC·^TNX·^IRX·GC=F·CL=F·000300.SS) 수집.
+> RS·EMA130 피처 추가 (v0.5.8): `ema130_ratio`(현재가/EMA130-1), `rs_vs_mkt_6m`(6개월 초과수익) 추가 — 28→30개. `koreanstocks train` 재학습 필수.
 
 ### 3-1. 피처 목록
 
@@ -95,7 +96,9 @@ df_all = df_all.dropna(subset=['target'])     # 중간 50% 제외
 | | `adx` | ADX 추세 강도 (0-100) |
 | | `bb_width` | BB 너비 / BB 중심선 |
 | | `bb_position` | BB 내 상대 위치 — (종가 − BB하단) / (BB상단 − BB하단) |
-| 시장 상대강도 (1) | `rs_vs_mkt_3m` | 3개월 수익률 − 벤치마크 3개월 |
+| 시장 상대강도 (2) | `rs_vs_mkt_3m` | 3개월 수익률 − 벤치마크 3개월 |
+| | `rs_vs_mkt_6m` | 6개월 수익률 − 벤치마크 6개월 (v0.5.8 추가) |
+| EMA130·장기추세 (1) | `ema130_ratio` | 현재가 / EMA130 − 1 (v0.5.8 추가) |
 | 모멘텀·추세 (5) | `high_52w_ratio` | 종가 / 52주 고점 |
 | | `mom_accel` | return_1m − (return_3m / 3) |
 | | `macd_diff` | MACD − Signal (히스토그램) |
@@ -260,7 +263,7 @@ Receptive field = 1 + 2×(1+2+4) = 15 거래일
 [트리 모델 공통]
 1. KS11/KQ11 시장 수익률 로드 (상대강도 피처용)
 2. 거시경제 데이터 로드 (Yahoo Finance 8개 심볼: ^VIX·^GSPC·^IXIC·^TNX·^IRX·GC=F·CL=F·000300.SS)
-3. 종목별 OHLCV 수집 + 지표 계산 + 피처 생성 (28개)
+3. 종목별 OHLCV 수집 + 지표 계산 + 피처 생성 (30개)
 4. 전 종목 concat → 날짜별 크로스섹셔널 순위 → 이진 타깃 산출
    (상위 25% = 1, 하위 25% = 0, 중간 50% 제외)
 5. 시계열 분할 (앞 80% → 학습 / 뒤 20% → 검증, 경계 Purging 20거래일 적용)
@@ -327,9 +330,9 @@ tr_dates = set(unique_dates[:purge_boundary])
 | 양성 비율 | 50.5% (중립 구간 제외로 균형) |
 | 분할 기준일 | ≈ 2025-10 (재학습 시마다 변동) |
 | Purging 일수 | 20거래일 (학습/검증 경계 누출 방지) |
-| 피처 수 | **28개** (v0.5.0: 거시 8개 추가) |
+| 피처 수 | **30개** (v0.5.8: EMA130+RS 2개 추가) |
 
-> ⚠️ v0.5.0에서 피처가 20→28개로 확장됐으므로 `koreanstocks train` 재학습 필수. 이전 모델(20개 피처)은 28개 피처 환경에서 자동으로 기본값(중립)으로 폴백됨.
+> ⚠️ v0.5.8에서 피처가 28→30개로 확장됐으므로 `koreanstocks train` 재학습 필수. 이전 모델(28개 피처)은 30개 피처 환경에서 자동으로 tech_score fallback으로 동작.
 
 ---
 
@@ -543,7 +546,7 @@ models/saved/model_params/
 | 항목 | 값 | 이유 |
 |------|----|------|
 | 종합 점수 가중치 | tech×0.35+ml×0.35+종목감성×0.20+거시감성×0.10 (ML+macro) | 백테스트 검증 기반 |
-| 피처 목록 | BASE 28개 | 모델 재학습 없이 변경 불가 |
+| 피처 목록 | BASE 30개 | 모델 재학습 없이 변경 불가 |
 | 타깃 정의 | 상위 25%/하위 25% 이진, 중간 50% 제외 | AUC 최적화 기반 |
 | 캘리브레이션 기준 | test_proba 101분위수 | train_proba 기준은 과적합 분포 반영 |
 

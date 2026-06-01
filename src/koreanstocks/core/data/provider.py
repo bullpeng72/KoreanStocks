@@ -1017,7 +1017,7 @@ def fetch_market_df(symbol: str = 'KS11', period: str = '2y') -> pd.DataFrame:
     Returns
     -------
     DataFrame
-        컬럼: return_1m (20d), return_3m (60d). 수집 실패 시 빈 DataFrame.
+        컬럼: return_1m (20d), return_3m (60d), return_6m (126d). 수집 실패 시 빈 DataFrame.
     """
     _log = logging.getLogger(__name__)
     # FDR 경유 Yahoo Finance — '^' 접두사로 KRX 직접 접근 차단 회피
@@ -1028,6 +1028,7 @@ def fetch_market_df(symbol: str = 'KS11', period: str = '2y') -> pd.DataFrame:
             mkt = pd.DataFrame(index=raw.index)
             mkt['return_1m'] = raw['close'].pct_change(20)
             mkt['return_3m'] = raw['close'].pct_change(60)
+            mkt['return_6m'] = raw['close'].pct_change(126)
             _log.info(f"  [시장] {symbol} 수익률 {len(mkt)}개 로드 완료")
             return mkt
         _log.warning(f"  [시장] {symbol} FDR 빈 응답 — yfinance 폴백 시도")
@@ -1048,6 +1049,7 @@ def fetch_market_df(symbol: str = 'KS11', period: str = '2y') -> pd.DataFrame:
             mkt = pd.DataFrame(index=close.index)
             mkt['return_1m'] = close.pct_change(20)
             mkt['return_3m'] = close.pct_change(60)
+            mkt['return_6m'] = close.pct_change(126)
             _log.info(f"  [시장] {yf_sym} (yfinance 폴백) {len(mkt)}개 로드 완료")
             return mkt
     except Exception as e2:

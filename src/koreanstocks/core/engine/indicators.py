@@ -33,6 +33,8 @@ class IndicatorCalculator:
                 df['sma_60'] = ta.trend.sma_indicator(df['close'], window=60, fillna=False)
             if data_len >= 120:
                 df['sma_120'] = ta.trend.sma_indicator(df['close'], window=120, fillna=False)
+            if data_len >= 130:
+                df['ema130'] = ta.trend.ema_indicator(df['close'], window=130, fillna=False)
             
             # 2. MACD (Trend) - 기본적으로 26일 이상이면 가능
             df['macd'] = ta.trend.macd(df['close'], fillna=False)
@@ -170,6 +172,15 @@ class IndicatorCalculator:
             if pd.notna(latest.get('adx_pos')) and pd.notna(latest.get('adx_neg')):
                 if latest['adx_pos'] > latest['adx_neg']:
                     trend_score = min(40, trend_score + 3)
+        except (KeyError, TypeError):
+            pass
+
+        # EMA130 장기 추세 보너스: 현재가 > 130일 EMA = 6개월 장기 상승 추세
+        try:
+            ema130_val = latest.get('ema130')
+            if pd.notna(ema130_val) and float(ema130_val) > 0:
+                if latest['close'] > float(ema130_val):
+                    trend_score = min(40, trend_score + 2)
         except (KeyError, TypeError):
             pass
 

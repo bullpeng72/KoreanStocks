@@ -63,6 +63,23 @@ _W_TECH_ML_NM    = (0.40, 0.35, 0.25)         # ML만: tech, ml, stock_sent (거
 _W_TECH_NOML     = (0.65, 0.35)               # ML 없음 fallback: tech, stock_sent
 
 
+# ── RS 최소 임계값 (후보풀 내 rs_score 백분위, 버킷별 차등 적용) ──────────────────
+# momentum/volume 버킷에서 6개월 시장 대비 최하위 종목 제외
+# rebound는 저RS 반등 후보를 의도적으로 타겟하므로 하한 없음
+RS_MIN_SCORE: Dict[str, int] = {
+    'momentum': 40,  # 후보군 하위 40% 이하 제외
+    'volume':   30,  # 후보군 하위 30% 이하 제외
+    'rebound':   0,  # 하한 없음
+}
+
+# ── 섹터 모멘텀 감지 (강세 섹터 우선 선발) ─────────────────────────────────────
+SECTOR_HOT_THRESHOLD:   float = 60.0  # 섹터 평균 rs_score ≥ 이 값 → 강세 섹터로 분류
+SECTOR_MOMENTUM_BONUS:  float = 3.0   # 강세 섹터 종목 정렬 가산점 (composite_score 저장값에 미포함)
+
+# ── 최소 유동성 기준 (극소형주·투전주 필터) ───────────────────────────────────────
+MIN_STOCK_PRICE:      float = 3_000.0        # 최소 주가 (원) — 1,000~2,000원대 극소형주 제외
+MIN_AVG_TRADE_VALUE:  float = 300_000_000.0  # 최소 평균 거래대금 3억/일 (avg_vol × close)
+
 # ── 가치주 스크리너 정렬 가중치 (단일 소스) ──────────────────────────────────────
 # f_score(0~9)를 0~40점 구간으로 정규화한 뒤 value_score(0~100)와 복합 정렬
 # 합계는 반드시 1.0: FSCORE_WEIGHT + VALUE_SCORE_WEIGHT == 1.0
