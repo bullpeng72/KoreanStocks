@@ -34,6 +34,9 @@ try:
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
     _TORCH_OK = True
+    # macOS에서 LightGBM/XGBoost 등 OpenMP 사용 라이브러리와 PyTorch CPU 혼용 시
+    # 발생할 수 있는 OpenMP 교착 상태(Deadlock) 및 행(Hang) 현상을 방지하기 위해 1개 스레드로 제한
+    torch.set_num_threads(1)
 except Exception:
     _TORCH_OK = False
     import sys as _sys
