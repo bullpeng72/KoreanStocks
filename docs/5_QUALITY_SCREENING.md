@@ -1,7 +1,7 @@
 # 우량주 스크리닝 시스템 기술 문서
 
-> Korean Stocks AI/ML Analysis System `v0.5.8`
-> 최종 업데이트: 2026-06-01
+> Korean Stocks AI/ML Analysis System `v0.5.9`
+> 최종 업데이트: 2026-06-23
 
 ---
 

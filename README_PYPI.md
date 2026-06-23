@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.5.8-blue)
+![version](https://img.shields.io/badge/version-0.5.9-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -711,7 +711,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.8"
+│       ├── __init__.py                  # VERSION = "0.5.9"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -775,6 +775,11 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.9 (2026-06-23) — macOS 환경 OpenMP 데드락 해결 및 안정성 강화
+
+- 🐛 `tcn_model.py`: TCN 학습 시 macOS OpenMP 데드락 방지 — `OMP_NUM_THREADS=1` 강제 설정
+- 🐛 `prediction_model.py`: PyTorch CPU 스레드를 1로 제한 (`torch.set_num_threads(1)`) — LightGBM과의 OpenMP 충돌 방지
 
 ### v0.5.8 (2026-06-01) — EMA130 · RS(상대강도) · 유동성·섹터 필터 추가
 
