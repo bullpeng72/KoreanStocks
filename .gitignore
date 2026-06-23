@@ -40,11 +40,11 @@ wheels/
 htmlcov/
 
 # Models
-models/saved/prediction_models/*.pkl
-models/saved/model_params/*.json
+# .pkl 및 model_params/*.json 은 GitHub Actions 배포를 위해 git에 포함
+# (전체 크기 ~1MB로 LFS 불필요)
+data/storage/pykrx_cache_*.pkl
 
 # Runtime caches
-data/storage/pykrx_cache_*.pkl
 data/storage/dart_corp_cache.json
 
 # CatBoost training logs (auto-generated, not needed in repo)

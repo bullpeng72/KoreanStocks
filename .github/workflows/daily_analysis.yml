@@ -88,6 +88,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dl]"
 
+      - name: Verify ML models available
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          sys.path.insert(0, 'src')
+          from koreanstocks.core.engine.prediction_model import StockPredictionModel
+          m = StockPredictionModel()
+          count = len(m.models)
+          print(f"ML 모델 로드: {count}개 — {list(m.models.keys())}")
+          if count == 0:
+              print("⚠️  ML 모델 없음 — tech_score 폴백으로 실행됩니다.", file=sys.stderr)
+          PYEOF
+
       - name: Check trading day
         id: check_trading_day
         env:

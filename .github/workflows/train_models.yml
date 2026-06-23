@@ -1,0 +1,92 @@
+name: Train ML Models
+
+on:
+  schedule:
+    # 매주 일요일 오전 1시 KST (토요일 16:00 UTC) 자동 학습
+    - cron: '0 16 * * 6'
+  workflow_dispatch:
+    inputs:
+      auto_tune:
+        description: '하이퍼파라미터 자동 탐색 (--auto-tune)'
+        type: boolean
+        default: false
+      reset_overrides:
+        description: 'override 초기화 후 재학습 (--reset-overrides)'
+        type: boolean
+        default: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Restore DB from artifacts
+        run: gh run download --name stock-database --dir data/storage || echo "No previous DB found, starting fresh"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+
+      - name: Ensure directories exist
+        run: |
+          mkdir -p data/storage
+          mkdir -p models/saved/prediction_models
+          mkdir -p models/saved/model_params
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libomp-dev
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dl]"
+
+      - name: Train ML models
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          DB_PATH: "data/storage/stock_analysis.db"
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.auto_tune }}" == "true" ]; then FLAGS="$FLAGS --auto-tune"; fi
+          if [ "${{ inputs.reset_overrides }}" == "true" ]; then FLAGS="$FLAGS --reset-overrides"; fi
+          koreanstocks train $FLAGS
+
+      - name: Verify models loaded correctly
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          sys.path.insert(0, 'src')
+          from koreanstocks.core.engine.prediction_model import StockPredictionModel
+          m = StockPredictionModel()
+          count = len(m.models)
+          print(f"모델 로드 성공: {count}개 — {list(m.models.keys())}")
+          if count == 0:
+              print("ERROR: 모델이 하나도 로드되지 않았습니다", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+      - name: Commit updated models to repository
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+          git add models/saved/prediction_models/ models/saved/model_params/
+          git diff --staged --quiet && echo "모델 변경 없음 — 커밋 건너뜀" || \
+            git commit -m "chore: retrain ML models $(date +'%Y-%m-%d')"
+          git push || (git pull --rebase origin main && git push)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
