@@ -47,13 +47,13 @@
 | **AI 종목 추천** | 기술적 지표·ML·뉴스를 종합한 복합 점수로 유망 종목 선정 |
 | **버킷 기반 선정** | 거래량 상위·상승 모멘텀·반등 후보 3개 버킷 쿼터 보장 (배지 UI 표시) |
 | **날짜별 히스토리** | 과거 30일 분석 결과를 날짜 선택으로 조회 |
-| **추천 지속성 히트맵** | 연속 추천(🔥)·비연속 반복 추천(🔄/📌) 배지로 신호 신뢰도 시각화 |
+| **추천 지속성 히트맵** | SS~D 7등급 체계·연속/반복 배지(🔥🔄📌)·최신 점수 인라인·teal Cp 보더로 신호 신뢰도 시각화 |
 | **DB 우선 조회 & 캐시** | 당일 저장된 DB 결과 우선 표시, 메뉴 이탈 후 재진입 시 세션 캐시 유지 |
 | **DB 자동 동기화** | GitHub Actions 완료 후 DB를 저장소에 자동 커밋·푸시 → `koreanstocks sync` 한 번으로 최신 결과 반영 |
 | **텔레그램 알림** | 종합점수 바·당일 등락률·RSI·뉴스 헤드라인·AI 강점 포함 구조화 리포트 발송 |
 | **전략 백테스팅** | RSI · MACD · COMPOSITE 전략 시뮬레이션 (단순보유 비교, 초보자 해석 가이드 포함) |
 | **관심 종목 관리** | Watchlist 등록 및 분석 이력 타임라인 제공 |
-| **추천 성과 추적** | 5·10·20거래일 후 실제 수익률 자동 검증, 승률·목표가 달성률 통계 제공 |
+| **추천 성과 추적** | 5·10·20거래일 후 실제 수익률 자동 검증, 승률·목표가 달성률 통계 제공 (조회 기간: 2/3/6개월) |
 | **가치주 스크리닝** | PER·PBR·ROE·부채비율·Piotroski F-Score 필터 + value_score 정렬, 당일 인메모리 캐시 |
 | **우량주 스크리닝** | ROE·영업이익률·YoY성장·부채비율·PBR 필터 + quality_score 정렬, ROE 2개년 평균으로 지속성 확인 |
 | **모델 신뢰도 대시보드** | ML 모델 AUC·과적합 갭·드리프트 등급·피처 중요도·재학습 권장 여부 확인 |
@@ -760,14 +760,15 @@ KoreanStocks/
 ├── models/saved/                        # 학습된 ML 모델 (.pkl) · 파라미터 (.json)
 ├── data/storage/                        # SQLite DB 파일
 ├── docs/
-│   ├── ML_ANALYSIS.md                   # ML 앙상블 시스템 기술 문서
-│   ├── TECHNICAL_ANALYSIS.md            # 기술적 분석 시스템 기술 문서
-│   ├── NEWS_ANALYSIS.md                 # 뉴스 감성 분석 시스템 기술 문서
-│   ├── VALUE_SCREENING.md               # 가치주 스크리닝 기술 문서
-│   └── QUALITY_SCREENING.md             # 우량주 스크리닝 기술 문서
+│   ├── 1_TECHNICAL_ANALYSIS.md          # 기술적 분석 시스템 기술 문서
+│   ├── 2_ML_ANALYSIS.md                 # ML 앙상블 시스템 기술 문서
+│   ├── 3_NEWS_ANALYSIS.md               # 뉴스 감성 분석 시스템 기술 문서
+│   ├── 4_VALUE_SCREENING.md             # 가치주 스크리닝 기술 문서
+│   ├── 5_QUALITY_SCREENING.md           # 우량주 스크리닝 기술 문서
+│   └── 6_PERFORMANCE_IMPROVEMENT.md     # 추천 성과 분석 및 개선 계획
 ├── tests/
 │   ├── test_backtester.py               # 백테스터 단위 테스트
-│   └── compat_check.py                  # Python 3.11-3.13 호환성 검증
+│   └── compat_check.py                  # Python 3.11~3.13 호환성 검증
 └── .github/workflows/
     └── daily_analysis.yml               # GitHub Actions 스케줄러
 ```
