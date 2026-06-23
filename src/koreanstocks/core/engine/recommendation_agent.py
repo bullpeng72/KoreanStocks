@@ -69,14 +69,16 @@ def _passes_kospi_filter(analysis: Dict[str, Any]) -> bool:
 
 
 def _is_sentiment_overheated(analysis: Dict[str, Any]) -> bool:
-    """강긍정 감성(>50) 차단 — 전체 시장(KOSPI·KOSDAQ) 적용.
+    """긍정 과열 감성(≥40) 차단 — 전체 시장(KOSPI·KOSDAQ) 적용.
 
-    성과 분석(n=234): 감성 구간별 역U자형 패턴이 전 시장에서 확인됨.
-    강긍정(60+) 정답률 33.3%, 중앙값 -11.01% — 재료 선반영 신호.
-    KOSPI는 _passes_kospi_filter(sentiment≤40)로 이미 차단되므로 실질 적용 대상은 KOSDAQ.
+    성과 분석(n=172 BUY): 감성 구간별 수익률
+      ≥50: avg_5d=-2.67%, acc=41.2% / 20~50: avg_5d=+2.13%, acc=45.9%
+      0~20: avg_5d=+4.79%, acc=53.9%  ← 중립 감성이 최고 성과
+    임계값을 50→40으로 강화해 '재료 선반영' 구간까지 차단.
+    KOSPI는 _passes_kospi_filter(sentiment≤40)로 이미 동일 조건 적용 중.
     """
     sentiment = float(analysis.get('sentiment_score') or 0)
-    return sentiment > 50
+    return sentiment >= 40
 
 
 def _is_sentiment_rsi_overheated(analysis: Dict[str, Any]) -> bool:
@@ -461,20 +463,21 @@ class RecommendationAgent:
         else:
             logger.warning("[품질 필터] 결과 없음 — 필터 건너뜀 (전체 유지)")
 
-        # ── [N-3] risk_off + rebound BUY→HOLD ───────────────────────
-        # 성과 분석(n=10): risk_off 레짐 + rebound 버킷 정답률 30%, 평균 -7.45%.
-        # 하락장에서 기술적 반등 신호의 신뢰도가 구조적으로 낮음.
+        # ── [N-3] risk_off + rebound/momentum BUY→HOLD ──────────────
+        # 성과 분석: risk_off 레짐 하락장에서 기술적 반등·모멘텀 신호 모두 신뢰도 낮음.
+        # rebound(반등 후보) + momentum(상승 모멘텀) 버킷 BUY→HOLD 전환.
+        # volume 버킷은 유동성 기반이므로 유지 (청산 대기 포지션 가이드 역할).
         if regime == 'risk_off':
             _n3_converted = 0
             for r in results:
-                if r.get('bucket') == 'rebound':
+                if r.get('bucket') in ('rebound', 'momentum'):
                     ai_op = r.get('ai_opinion') or {}
                     if ai_op.get('action') == 'BUY':
                         ai_op['action'] = 'HOLD'
-                        r['action_override'] = 'risk_off 레짐 + rebound 버킷 — BUY→HOLD 전환'
+                        r['action_override'] = f"risk_off 레짐 + {r.get('bucket')} 버킷 — BUY→HOLD 전환"
                         _n3_converted += 1
             if _n3_converted:
-                logger.info(f"[N-3] risk_off+rebound BUY→HOLD {_n3_converted}건 전환")
+                logger.info(f"[N-3] risk_off+rebound/momentum BUY→HOLD {_n3_converted}건 전환")
 
         # ── 상대 순위 계산 [S-3] ─────────────────────────────────────
         # 복합점수 절대값은 64~92점에 집중되어 변별력이 낮음.

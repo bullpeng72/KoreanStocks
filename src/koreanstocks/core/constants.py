@@ -19,10 +19,12 @@ BUCKET_LABELS: Dict[str, str] = {
 }
 
 # 버킷별 후보 풀 할당 비율 (합계 = 1.0)
+# 성과 분석(n=172): rebound acc_5d=65.6%, momentum=49.1%, volume=39.8%
+# volume 과다 선정 문제 해소를 위해 rebound 비중 확대
 BUCKET_RATIOS: List[Tuple[str, float]] = [
-    ('volume',   0.40),
+    ('volume',   0.25),
     ('momentum', 0.35),
-    ('rebound',  0.25),
+    ('rebound',  0.40),
 ]
 
 # ── ML 앙상블 가중치 및 하이퍼파라미터 (단일 소스) ─────────────────────────────
@@ -35,11 +37,12 @@ ENSEMBLE_RNK_WEIGHT: float = 0.25
 SOFTMAX_TEMPERATURE: float = 5.0
 
 # ── 레짐별 composite_score 최소 임계값 (recommendation_agent 단일 소스) ────────
-# risk_off일수록 문턱을 높여 보수적 추천
+# 성과 분석: uncertain 레짐에서 5월 avg_5d=-10.6%, acc=15.8% 기록
+# → uncertain·risk_off 임계값 상향해 약한 신호 차단
 REGIME_SCORE_THRESHOLD: Dict[str, float] = {
     "risk_on":   45.0,
-    "uncertain": 50.0,
-    "risk_off":  57.0,
+    "uncertain": 55.0,
+    "risk_off":  62.0,
 }
 
 # ── Auto-Tune 진단 임계값 (trainer.py 단일 소스) ──────────────────────────────

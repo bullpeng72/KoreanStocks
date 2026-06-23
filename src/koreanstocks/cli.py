@@ -275,7 +275,7 @@ def analyze(
 
 @app.command()
 def train(
-    period: str = typer.Option("2y", help="학습 데이터 기간: 1y | [cyan]2y[/cyan]"),
+    period: str = typer.Option("2y", help="학습 데이터 기간: 1y | [cyan]2y[/cyan] | 3y"),
     future_days: int = typer.Option(10, help="예측 대상 거래일 수 (기본 10 = 2주, 중기 노이즈 최소화)"),
     test_ratio: float = typer.Option(0.2, help="검증 세트 비율 (0~1)"),
     auto_tune: bool = typer.Option(False, "--auto-tune", help="품질 미달 모델 자동 파라미터 탐색·재학습"),

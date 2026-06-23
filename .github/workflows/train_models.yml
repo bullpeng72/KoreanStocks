@@ -60,7 +60,7 @@ jobs:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
           DB_PATH: "data/storage/stock_analysis.db"
         run: |
-          FLAGS=""
+          FLAGS="--period 3y"
           if [ "${{ inputs.auto_tune }}" == "true" ]; then FLAGS="$FLAGS --auto-tune"; fi
           if [ "${{ inputs.reset_overrides }}" == "true" ]; then FLAGS="$FLAGS --reset-overrides"; fi
           koreanstocks train $FLAGS
