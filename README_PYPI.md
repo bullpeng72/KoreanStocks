@@ -133,9 +133,9 @@ DB          SQLite (data/storage/stock_analysis.db)
 ```
 FinanceDataReader + KIND API (KOSPI · KOSDAQ 전체 종목)
   → 시장 필터 (KOSPI / KOSDAQ / ALL)
-     ├─ 🟦 거래량 상위    40% 쿼터
+     ├─ 🟦 거래량 상위    25% 쿼터
      ├─ 🟩 상승 모멘텀    +2%-+15%,  35% 쿼터
-     └─ 🟥 반등 후보      거래량 상위 중 하락,  25% 쿼터
+     └─ 🟥 반등 후보      거래량 상위 중 하락,  40% 쿼터
   → 분석 풀 구성: min(limit × 8, 80)개
     ※ 기본 limit=9 → 최대 72종목
 ```
@@ -770,7 +770,8 @@ KoreanStocks/
 │   ├── test_backtester.py               # 백테스터 단위 테스트
 │   └── compat_check.py                  # Python 3.11~3.13 호환성 검증
 └── .github/workflows/
-    └── daily_analysis.yml               # GitHub Actions 스케줄러
+    ├── daily_analysis.yml               # GitHub Actions 스케줄러 (평일 16:30 KST)
+    └── train_models.yml                 # ML 모델 재학습 워크플로우 (매주 일요일)
 ```
 
 ---
