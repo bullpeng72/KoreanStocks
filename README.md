@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.5.9-blue)
+![version](https://img.shields.io/badge/version-0.5.10-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -779,7 +779,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.9"
+│       ├── __init__.py                  # VERSION = "0.5.10"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -844,6 +844,16 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.10 (2026-06-24) — ML 배포 수정 및 추천 품질 개선
+
+- 🐛 `.gitignore`: `*.pkl` / `model_params/*.json` 제외 규칙 삭제 — GitHub Actions 체크아웃 시 ML 모델(RF·GB·LGB·CB·XGBRanker)이 로드되지 않던 근본 원인 해소 (603건 전체 추천이 tech_score 단독으로 생성되던 문제)
+- ✨ `.github/workflows/train_models.yml`: 모델 재학습 후 자동 커밋하는 워크플로우 추가 (매주 일요일 + 수동 트리거, `--period 3y` 기본 적용)
+- ✨ `daily_analysis.yml`: ML 모델 로드 검증 단계 추가 (모델 0개 시 경고 출력)
+- 🔧 `constants.py`: 버킷 비율 조정 — rebound 25%→40%, volume 40%→25% (성과 분석: rebound acc_5d=65.6% vs volume=39.8%)
+- 🔧 `constants.py`: 레짐 임계값 강화 — uncertain 50→55, risk_off 57→62 (5월 uncertain 레짐 avg_5d=-10.6% 참사 대응)
+- 🔧 `recommendation_agent.py`: 감성 과열 필터 강화 — KOSDAQ 차단 임계값 >50→≥40 (중립감성 0~20 구간이 최고 성과 확인)
+- 🔧 `recommendation_agent.py`: risk_off 레짐 BUY→HOLD 확장 — rebound 버킷 전용에서 momentum 버킷도 포함
 
 ### v0.5.9 (2026-06-22) — macOS 환경 OpenMP 데드락 해결 및 안정성 강화
 

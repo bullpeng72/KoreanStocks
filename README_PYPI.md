@@ -1,6 +1,6 @@
 # 📈 Korean Stocks AI/ML Analysis System
 
-![version](https://img.shields.io/badge/version-0.5.9-blue)
+![version](https://img.shields.io/badge/version-0.5.10-blue)
 ![python](https://img.shields.io/badge/python-3.11~3.13-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -711,7 +711,7 @@ KoreanStocks/
 ├── train_models.py                      # ML 모델 재학습 스크립트
 ├── src/
 │   └── koreanstocks/
-│       ├── __init__.py                  # VERSION = "0.5.9"
+│       ├── __init__.py                  # VERSION = "0.5.10"
 │       ├── cli.py                       # Typer CLI (10개 명령어)
 │       ├── api/
 │       │   ├── app.py                   # FastAPI 앱 팩토리
@@ -776,6 +776,13 @@ KoreanStocks/
 ---
 
 ## 📝 변경 이력
+
+### v0.5.10 (2026-06-24) — ML 배포 수정 및 추천 품질 개선
+
+- 🐛 `.gitignore`: ML 모델 파일(`.pkl`) 제외 규칙 삭제 — GitHub Actions에서 ML 앙상블이 실제로 동작하지 않던 근본 원인 해소
+- ✨ `train_models.yml`: 모델 재학습 자동화 워크플로우 추가 (매주 일요일, `--period 3y`)
+- 🔧 `constants.py`: 버킷 비율 — rebound 40%(↑), volume 25%(↓); 레짐 임계값 강화 (uncertain 55, risk_off 62)
+- 🔧 `recommendation_agent.py`: 감성 과열 필터 ≥40으로 강화; risk_off 시 momentum 버킷도 BUY→HOLD 전환
 
 ### v0.5.9 (2026-06-23) — macOS 환경 OpenMP 데드락 해결 및 안정성 강화
 
